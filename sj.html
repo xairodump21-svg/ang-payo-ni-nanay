@@ -1,0 +1,2070 @@
+<!DOCTYPE html>
+<html lang="tl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>ANG PANYO NI NANAY</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;overflow:hidden;height:100%;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+  body{display:flex;align-items:center;justify-content:center;font-family:monospace;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  canvas{image-rendering:pixelated;image-rendering:crisp-edges;display:block;cursor:pointer;max-width:100%;max-height:100%}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+'use strict';
+
+/* ============================================================
+   SETUP
+   ============================================================ */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = 360, H = 640;
+canvas.width = W; canvas.height = H;
+ctx.imageSmoothingEnabled = false;
+function fit(){
+  const s = Math.min(innerWidth/W, innerHeight/H);
+  canvas.style.width = (W*s)+'px';
+  canvas.style.height = (H*s)+'px';
+}
+addEventListener('resize', fit); fit();
+const R = (x,y,w,h,c)=>{ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w|0,h|0); };
+
+/* ============================================================
+   STATE
+   ============================================================ */
+const G = {
+  time: 0,
+  scene: 'menu',
+  fade: 0, fadeTarget: 0, fadeSpeed: 1.2,
+  shake: 0, flash: 0, whiteOut: 0,
+  cry: 0, cryTarget: 0,
+  tears: [],
+  text: { who:'', full:'', shown:0, charT:0, done:false },
+  storyIdx: 0,
+  autoTimer: 0,
+  ended: false,
+  phase: 'menu',
+  realMusicPhase: false,
+  _faceX: null, _faceY: null, _eyeSpacing: 0,
+};
+
+/* ============================================================
+   AUDIO CONTEXT
+   ============================================================ */
+let audioCtx = null, master = null, reverbBus = null;
+function initAudio(){
+  if (audioCtx) return;
+  try { audioCtx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e){ return; }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  master = audioCtx.createGain();
+  master.gain.value = 0.7;
+  master.connect(audioCtx.destination);
+  const len = Math.floor(audioCtx.sampleRate * 2.8);
+  const buf = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+  for (let c=0;c<2;c++){
+    const d = buf.getChannelData(c);
+    for (let i=0;i<len;i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, 2.3);
+  }
+  const conv = audioCtx.createConvolver(); conv.buffer = buf;
+  const lp = audioCtx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=2200;
+  const wet = audioCtx.createGain(); wet.gain.value = 0.45;
+  const dry = audioCtx.createGain(); dry.gain.value = 0.75;
+  reverbBus = audioCtx.createGain();
+  reverbBus.connect(dry); dry.connect(master);
+  reverbBus.connect(conv); conv.connect(lp); lp.connect(wet); wet.connect(master);
+}
+
+/* ============================================================
+   PROCEDURAL BGM
+   ============================================================ */
+const NOTE = {
+  C2:65.41, D2:73.42, E2:82.41, F2:87.31, G2:98.00, A2:110.00, B2:123.47,
+  C3:130.81, D3:146.83, E3:164.81, F3:174.61, G3:196.00, A3:220.00, B3:246.94,
+  Bb2:116.54, Eb3:155.56, Ab3:207.65, Bb3:233.08,
+  C4:261.63, D4:293.66, E4:329.63, F4:349.23, G4:392.00, A4:440.00, B4:493.88,
+  Bb4:466.16, Eb4:311.13, Ab4:415.30,
+  C5:523.25, D5:587.33, E5:659.25, F5:698.46, G5:783.99, A5:880.00, B5:987.77,
+  C6:1046.50, Eb5:622.25,
+};
+
+const MOODS = {
+  tender: {
+    tempo: 2100, padVol: 0.030, bassVol: 0.045,
+    chords: [
+      { pad:[NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.C3 },
+      { pad:[NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.G2 },
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+      { pad:[NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.F2 },
+    ],
+    melody: [
+      {t:0.0,n:NOTE.E5,d:1.2,v:0.028},{t:1.6,n:NOTE.G5,d:0.8,v:0.028},
+      {t:3.0,n:NOTE.C5,d:1.4,v:0.028},{t:5.0,n:NOTE.G4,d:1.6,v:0.026},
+      {t:7.5,n:NOTE.C5,d:1.0,v:0.026},{t:9.0,n:NOTE.E5,d:1.4,v:0.028},
+    ],
+  },
+  somber: {
+    tempo: 2400, padVol: 0.028, bassVol: 0.042,
+    chords: [
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+      { pad:[NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.F2 },
+      { pad:[NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.C3 },
+      { pad:[NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.G2 },
+    ],
+    melody: [
+      {t:0.0,n:NOTE.A4,d:1.4,v:0.024},{t:2.0,n:NOTE.C5,d:1.0,v:0.024},
+      {t:3.6,n:NOTE.E5,d:1.6,v:0.026},{t:6.0,n:NOTE.C5,d:1.2,v:0.022},
+      {t:8.0,n:NOTE.A4,d:1.6,v:0.024},
+    ],
+  },
+  hollow: {
+    tempo: 2700, padVol: 0.024, bassVol: 0.038,
+    chords: [
+      { pad:[NOTE.E3, NOTE.G3, NOTE.B3], bass: NOTE.E2 },
+      { pad:[NOTE.C3, NOTE.E3, NOTE.G3], bass: NOTE.C3 },
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+      { pad:[NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.G2 },
+    ],
+    melody: [
+      {t:1.0,n:NOTE.B4,d:2.0,v:0.020},{t:4.0,n:NOTE.A4,d:1.6,v:0.020},
+      {t:7.5,n:NOTE.E4,d:2.0,v:0.022},
+    ],
+  },
+  dread: {
+    tempo: 2500, padVol: 0.032, bassVol: 0.050,
+    chords: [
+      { pad:[NOTE.D3, NOTE.F3], bass: NOTE.D2 },
+      { pad:[NOTE.D3, NOTE.F3], bass: NOTE.D2 },
+      { pad:[NOTE.C3, NOTE.Eb3], bass: NOTE.C2 },
+      { pad:[NOTE.Bb2, NOTE.D3], bass: NOTE.A2 },
+    ],
+    melody: [
+      {t:2.0,n:NOTE.A3,d:1.6,v:0.018},{t:6.0,n:NOTE.Ab3,d:1.8,v:0.018},
+      {t:11.0,n:NOTE.G3,d:2.4,v:0.020},
+    ],
+  },
+  grief: {
+    tempo: 3000, padVol: 0.026, bassVol: 0.040,
+    chords: [
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+      { pad:[NOTE.E3, NOTE.G3, NOTE.B3], bass: NOTE.E2 },
+      { pad:[NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.F2 },
+      { pad:[NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.C3 },
+    ],
+    melody: [
+      {t:0.0,n:NOTE.E5,d:1.8,v:0.028},{t:2.5,n:NOTE.D5,d:1.0,v:0.026},
+      {t:4.5,n:NOTE.C5,d:2.0,v:0.028},{t:8.0,n:NOTE.B4,d:1.8,v:0.026},
+      {t:11.0,n:NOTE.A4,d:1.6,v:0.026},{t:14.0,n:NOTE.E4,d:2.5,v:0.028},
+    ],
+  },
+  revelation: {
+    tempo: 2400, padVol: 0.030, bassVol: 0.044,
+    chords: [
+      { pad:[NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.F2 },
+      { pad:[NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.C3 },
+      { pad:[NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.G2 },
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+    ],
+    melody: [
+      {t:0.0,n:NOTE.C5,d:1.4,v:0.026},{t:2.0,n:NOTE.A4,d:1.0,v:0.024},
+      {t:3.6,n:NOTE.F5,d:1.6,v:0.028},{t:6.0,n:NOTE.E5,d:1.2,v:0.026},
+      {t:8.0,n:NOTE.G5,d:1.8,v:0.028},{t:11.0,n:NOTE.C5,d:1.6,v:0.026},
+    ],
+  },
+  hope: {
+    tempo: 2400, padVol: 0.028, bassVol: 0.042,
+    chords: [
+      { pad:[NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.C3 },
+      { pad:[NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.G2 },
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+      { pad:[NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.F2 },
+    ],
+    melody: [
+      {t:0.0,n:NOTE.E4,d:0.8,v:0.026},{t:1.2,n:NOTE.G4,d:0.8,v:0.028},
+      {t:2.4,n:NOTE.C5,d:1.6,v:0.034},{t:5.0,n:NOTE.G5,d:1.6,v:0.032},
+      {t:8.0,n:NOTE.A5,d:1.4,v:0.030},{t:10.0,n:NOTE.C6,d:2.4,v:0.036},
+    ],
+  },
+  wisdom: {
+    tempo: 2600, padVol: 0.026, bassVol: 0.040,
+    chords: [
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+      { pad:[NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.F2 },
+      { pad:[NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.G2 },
+      { pad:[NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.C3 },
+    ],
+    melody: [
+      {t:0.5,n:NOTE.E5,d:1.6,v:0.024},{t:3.0,n:NOTE.C5,d:1.2,v:0.022},
+      {t:5.5,n:NOTE.A4,d:1.8,v:0.024},{t:8.5,n:NOTE.G4,d:1.6,v:0.024},
+      {t:11.5,n:NOTE.C5,d:2.0,v:0.026},
+    ],
+  },
+  menu: {
+    tempo: 2800, padVol: 0.024, bassVol: 0.036,
+    chords: [
+      { pad:[NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.A2 },
+      { pad:[NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.F2 },
+      { pad:[NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.C3 },
+      { pad:[NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.G2 },
+    ],
+    melody: [
+      {t:0.0,n:NOTE.E5,d:1.8,v:0.022},{t:3.5,n:NOTE.C5,d:1.4,v:0.022},
+      {t:6.5,n:NOTE.A4,d:2.0,v:0.024},{t:10.0,n:NOTE.E4,d:1.6,v:0.022},
+    ],
+  },
+};
+
+const BGM = {
+  master: null,
+  current: null,
+  currentName: null,
+  timer: null,
+  notesAlive: [],
+
+  init(){
+    if (!audioCtx || this.master) return;
+    this.master = audioCtx.createGain();
+    this.master.gain.value = 0.55;
+    this.master.connect(master);
+  },
+
+  play(name){
+    if (!audioCtx || !this.master) return;
+    if (this.currentName === name) return;
+    this.currentName = name;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    const now = audioCtx.currentTime;
+    for (const n of this.notesAlive){
+      try { n.gain.gain.cancelScheduledValues(now); n.gain.gain.linearRampToValueAtTime(0, now + 1.2); } catch(e){}
+      try { n.osc.stop(now + 1.4); } catch(e){}
+    }
+    this.notesAlive = [];
+    if (!name || !MOODS[name]) { this.current = null; return; }
+    this.current = MOODS[name];
+    this.scheduleLoop();
+  },
+
+  stop(){
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    const now = audioCtx ? audioCtx.currentTime : 0;
+    for (const n of this.notesAlive){
+      try { n.gain.gain.cancelScheduledValues(now); n.gain.gain.linearRampToValueAtTime(0, now + 0.8); } catch(e){}
+      try { n.osc.stop(now + 1.0); } catch(e){}
+    }
+    this.notesAlive = [];
+    this.current = null;
+    this.currentName = null;
+  },
+
+  scheduleLoop(){
+    if (!this.current) return;
+    const mood = this.current;
+    const loopMs = mood.chords.length * mood.tempo;
+    this.playPhrase(mood);
+    this.timer = setTimeout(()=> this.scheduleLoop(), loopMs - 100);
+  },
+
+  playPhrase(mood){
+    const t0 = audioCtx.currentTime + 0.05;
+    mood.chords.forEach((chord, i) => {
+      const startT = t0 + i * mood.tempo / 1000;
+      const dur = (mood.tempo / 1000) * 0.98;
+      for (const f of chord.pad){
+        this.padNote(f, startT, dur, mood.padVol);
+      }
+      this.bassNote(chord.bass, startT, dur * 0.85, mood.bassVol);
+    });
+    if (mood.melody){
+      for (const m of mood.melody){
+        this.pianoNote(m.n, t0 + m.t, m.d, m.v);
+      }
+    }
+  },
+
+  padNote(freq, startT, dur, vol){
+    const o1 = audioCtx.createOscillator(); o1.type='sine'; o1.frequency.value=freq;
+    const o2 = audioCtx.createOscillator(); o2.type='sine'; o2.frequency.value=freq*1.004;
+    const o3 = audioCtx.createOscillator(); o3.type='triangle'; o3.frequency.value=freq*0.5;
+    const g3 = audioCtx.createGain(); g3.gain.value = 0.35;
+    const env = audioCtx.createGain();
+    env.gain.setValueAtTime(0, startT);
+    env.gain.linearRampToValueAtTime(vol, startT + 1.2);
+    env.gain.setValueAtTime(vol, startT + Math.max(1.2, dur - 1.2));
+    env.gain.linearRampToValueAtTime(0, startT + dur);
+    o1.connect(env); o2.connect(env); o3.connect(g3); g3.connect(env);
+    env.connect(this.master);
+    o1.start(startT); o2.start(startT); o3.start(startT);
+    o1.stop(startT + dur + 0.1);
+    o2.stop(startT + dur + 0.1);
+    o3.stop(startT + dur + 0.1);
+    this.notesAlive.push({ osc: o1, gain: env });
+  },
+
+  pianoNote(freq, startT, dur, vol){
+    const o1 = audioCtx.createOscillator(); o1.type='triangle'; o1.frequency.value=freq;
+    const o2 = audioCtx.createOscillator(); o2.type='sine'; o2.frequency.value=freq*2.01;
+    const g2 = audioCtx.createGain(); g2.gain.value = 0.30;
+    const env = audioCtx.createGain();
+    env.gain.setValueAtTime(0, startT);
+    env.gain.linearRampToValueAtTime(vol, startT + 0.012);
+    env.gain.linearRampToValueAtTime(vol*0.5, startT + 0.18);
+    env.gain.exponentialRampToValueAtTime(0.0005, startT + dur);
+    o1.connect(env); o2.connect(g2); g2.connect(env);
+    env.connect(this.master); env.connect(reverbBus);
+    o1.start(startT); o1.stop(startT + dur + 0.05);
+    o2.start(startT); o2.stop(startT + dur + 0.05);
+    this.notesAlive.push({ osc: o1, gain: env });
+  },
+
+  bassNote(freq, startT, dur, vol){
+    const o1 = audioCtx.createOscillator(); o1.type='sine'; o1.frequency.value=freq;
+    const o2 = audioCtx.createOscillator(); o2.type='triangle'; o2.frequency.value=freq*2;
+    const g2 = audioCtx.createGain(); g2.gain.value = 0.12;
+    const env = audioCtx.createGain();
+    env.gain.setValueAtTime(0, startT);
+    env.gain.linearRampToValueAtTime(vol, startT + 0.08);
+    env.gain.linearRampToValueAtTime(vol*0.65, startT + 0.6);
+    env.gain.exponentialRampToValueAtTime(0.0006, startT + dur);
+    o1.connect(env); o2.connect(g2); g2.connect(env);
+    env.connect(this.master);
+    o1.start(startT); o2.start(startT);
+    o1.stop(startT + dur + 0.05);
+    o2.stop(startT + dur + 0.05);
+    this.notesAlive.push({ osc: o1, gain: env });
+  },
+};
+
+/* ============================================================
+   REAL MP3 MUSIC — blk.mp3 (sa phone call), then fixyou.mp3
+   ============================================================ */
+const MUSIC_FILES = { a: 'blk.mp3', b: 'fixyou.mp3' };
+const RealMusic = {
+  a: null, b: null,
+  startedA: false, startedB: false,
+  init(){
+    this.a = new Audio(MUSIC_FILES.a);
+    this.b = new Audio(MUSIC_FILES.b);
+    this.a.volume = 0.85;
+    this.b.volume = 0.85;
+    this.a.preload = 'auto';
+    this.b.preload = 'auto';
+    this.a.addEventListener('ended', ()=>{
+      if (!this.startedB) this.startB();
+    });
+  },
+  startA(){
+    if (this.startedA) return;
+    this.startedA = true;
+    BGM.stop();
+    if (this.a && this.a.paused){
+      this.a.currentTime = 0;
+      this.a.play().catch(()=>{});
+    }
+  },
+  startB(){
+    if (this.startedB) return;
+    this.startedB = true;
+    BGM.stop();
+    if (this.b){
+      this.b.currentTime = 0;
+      this.b.play().catch(()=>{});
+    }
+    if (this.a){
+      const fadeOut = setInterval(()=>{
+        if (this.a.volume > 0.05) this.a.volume = Math.max(0, this.a.volume - 0.05);
+        else { this.a.pause(); clearInterval(fadeOut); }
+      }, 100);
+    }
+  },
+};
+
+/* ============================================================
+   SFX
+   ============================================================ */
+function blip(pitch=520, vol=0.008){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type='square'; o.frequency.value = pitch;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0004, t+0.035);
+  o.connect(g); g.connect(master);
+  o.start(t); o.stop(t+0.04);
+}
+function heartbeat(vol=1){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  [0, 0.13].forEach(off=>{
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.frequency.setValueAtTime(70, t+off);
+    o.frequency.exponentialRampToValueAtTime(30, t+off+0.14);
+    g.gain.setValueAtTime(0, t+off);
+    g.gain.linearRampToValueAtTime(0.14*vol, t+off+0.010);
+    g.gain.exponentialRampToValueAtTime(0.0008, t+off+0.20);
+    o.connect(g); g.connect(master);
+    o.start(t+off); o.stop(t+off+0.22);
+  });
+}
+function flatline(){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  o.type = 'sine'; o.frequency.value = 1000;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.10, t+0.05);
+  g.gain.setValueAtTime(0.10, t+5.5);
+  g.gain.linearRampToValueAtTime(0, t+6);
+  o.connect(g); g.connect(master);
+  o.start(t); o.stop(t+6.1);
+}
+function chime(){
+  if (!audioCtx) return;
+  [523.25, 659.25, 783.99, 1046.50].forEach((f, i)=>{
+    setTimeout(()=>{
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type='sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0, audioCtx.currentTime);
+      g.gain.linearRampToValueAtTime(0.06/(i+1), audioCtx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0005, audioCtx.currentTime + 2.5);
+      o.connect(g); g.connect(reverbBus);
+      o.start(); o.stop(audioCtx.currentTime + 2.6);
+    }, i*140);
+  });
+}
+function thunder(){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const size = audioCtx.sampleRate * 2.5;
+  const buf = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<size;i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/size, 1.8);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const lp = audioCtx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=180;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.38, t+0.15);
+  g.gain.exponentialRampToValueAtTime(0.001, t+2.4);
+  src.connect(lp); lp.connect(g); g.connect(master);
+  src.start(t);
+}
+function wind(dur=6){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const size = audioCtx.sampleRate * dur;
+  const buf = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<size;i++) d[i] = (Math.random()*2-1);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const lp = audioCtx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=500;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.04, t+1);
+  g.gain.linearRampToValueAtTime(0.04, t+dur-1);
+  g.gain.linearRampToValueAtTime(0, t+dur);
+  src.connect(lp); lp.connect(g); g.connect(reverbBus);
+  src.start(t); src.stop(t+dur+0.1);
+}
+function paperRustle(){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const dur = 1.2;
+  const size = audioCtx.sampleRate * dur;
+  const buf = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<size;i++) d[i] = (Math.random()*2-1);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const bp = audioCtx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=3500; bp.Q.value=0.8;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.07, t+0.1);
+  g.gain.linearRampToValueAtTime(0.018, t+0.7);
+  g.gain.exponentialRampToValueAtTime(0.0008, t+dur);
+  src.connect(bp); bp.connect(g); g.connect(reverbBus);
+  src.start(t); src.stop(t+dur+0.05);
+}
+function rainLoop(dur=6){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const size = audioCtx.sampleRate * dur;
+  const buf = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<size;i++) d[i] = (Math.random()*2-1);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const bp = audioCtx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1200; bp.Q.value=0.7;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.05, t+0.8);
+  g.gain.linearRampToValueAtTime(0.05, t+dur-1);
+  g.gain.linearRampToValueAtTime(0, t+dur);
+  src.connect(bp); bp.connect(g); g.connect(reverbBus);
+  src.start(t); src.stop(t+dur+0.1);
+}
+function sceneTransition(){
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(180, t);
+  o.frequency.exponentialRampToValueAtTime(80, t + 0.6);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.04, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0005, t + 0.7);
+  o.connect(g); g.connect(reverbBus);
+  o.start(t); o.stop(t + 0.75);
+}
+function playNamedSFX(n){
+  if (n === 'heartbeat') heartbeat(1);
+  else if (n === 'heartbeat_fast'){ heartbeat(1.3); setTimeout(()=>heartbeat(1.0), 220); setTimeout(()=>heartbeat(0.9), 440); }
+  else if (n === 'flatline') flatline();
+  else if (n === 'chime') chime();
+  else if (n === 'thunder') thunder();
+  else if (n === 'wind') wind();
+  else if (n === 'paper') paperRustle();
+  else if (n === 'rain') rainLoop();
+  else if (n === 'transition') sceneTransition();
+}
+
+/* ============================================================
+   STORY DATA — quotes are now TAP to continue (no auto)
+   ============================================================ */
+const STORY = [
+  { sc:'black', txt:'Tatay...?', wait:1600 },
+  { sc:'black', txt:'Ah. Hindi. Mali.', wait:1600 },
+  { sc:'black', txt:'Nanay nga pala. Ang tawag ko sa kanya.', wait:2000 },
+  { sc:'black', txt:'Si Nanay Iska.', wait:1800 },
+  { sc:'black', txt:'At ito ang kwento ng isang panyong hindi ko maiingatan.', wait:2600 },
+
+  { sc:'railway', bgm:'tender', txt:'Sa tabi ng riles ng tren, may isang maliit na barong-barong. Butas-butas ang bubong.', wait:2200, chars:['nanay'] },
+  { sc:'railway', txt:'May isang babaeng naglalaba. Namumula ang kamay. Basag ang balat.', wait:2200, chars:['nanay'] },
+  { sc:'railway', txt:'At gayon pa man... ngumingiti siya.', wait:2400, chars:['nanay'] },
+  { sc:'railway', txt:'Ang pangalan niya ay Iska. Isang labandera.', wait:2000, chars:['nanay'] },
+  { sc:'railway', txt:'Buong buhay niya — wala nang iba.', wait:2000, chars:['nanay'] },
+  { sc:'railway', txt:'Hindi siya nakapagtapos ng kahit anong kurso. Hindi siya marunong mag-Ingles.', wait:2600, chars:['nanay'] },
+  { sc:'railway', txt:'Pero may isang bagay siyang alam nang buong-buo...', wait:2200, chars:['nanay'] },
+  { sc:'railway', txt:'...kung paano magmahal nang sobra-sobra.', wait:2400, chars:['nanay'] },
+  { sc:'railway', txt:'Hanggang sa wala nang natira para sa sarili niya.', wait:2800, chars:['nanay'] },
+
+  { sc:'kitchen', bgm:'tender', sfx:'paper', txt:'Umaga. Sa maliit na kusina, nagluluto si Nanay ng tuyo at sinangag.', wait:2200, chars:['nanay','marco_child'] },
+  { sc:'kitchen', txt:'"Marco, anak. Kumain ka na."', who:'NANAY', wait:2000, chars:['nanay','marco_child'] },
+  { sc:'kitchen', txt:'"Nilagyan ko ng extra na itlog ang baon mo — para hindi ka gutomin sa recess."', who:'NANAY', wait:2400, chars:['nanay','marco_child'] },
+  { sc:'kitchen', txt:'"Nay... bakit butas na ang sapatos mo?"', who:'MARCO (10)', wait:2000, chars:['nanay','marco_child'] },
+  { sc:'kitchen', txt:'"Ano ka ba. Maayos pa \'to. Tibay pa."', who:'NANAY', wait:2000, chars:['nanay','marco_child'] },
+  { sc:'kitchen', txt:'"Tsaka — hindi naman ako pumapasok sa eskwela."', who:'NANAY', wait:2000, chars:['nanay','marco_child'] },
+  { sc:'kitchen', txt:'"Ikaw ang pumapasok. Ikaw ang kailangan maganda ang sapatos."', who:'NANAY', wait:2400, chars:['nanay','marco_child'] },
+  { sc:'study', bgm:'somber', txt:'Gabi. Nag-aaral si Marco. Nasa tabi si Nanay, marahan ang pagmamasahe sa likod niya.', wait:2400, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'"Anak... ang pangarap ko para sa\'yo..."', who:'NANAY', wait:2000, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'"...hindi lang makapagtapos. Pangarap ko... maging masaya ka."', who:'NANAY', wait:2400, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'"Yung hindi ka magugutom. Yung hindi ka mag-aalala."', who:'NANAY', wait:2200, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'"Yung... hindi ka magiging katulad ko."', who:'NANAY', wait:2400, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'"Nay, wala namang masama sa pagiging katulad mo ah."', who:'MARCO (10)', wait:2200, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'"Alam ko, anak. Alam ko."', who:'NANAY', wait:2000, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'"Pero... gusto ko lang... yung buhay mo... mas magaan. Mas maliwanag."', who:'NANAY', wait:2400, chars:['nanay','marco_child'] },
+  { sc:'study', txt:'Hindi ko alam noon. Akala ko normal lang.', wait:2000, chars:['marco_child'] },
+  { sc:'study', txt:'Hindi ko alam na ang butas sa sapatos niya...', wait:2000, chars:['marco_child'] },
+  { sc:'study', txt:'...ay ang parehong butas na tinatakpan niya para hindi ko maramdaman ang lamig.', wait:2800, chars:['marco_child'] },
+
+  { sc:'railway', bgm:'somber', txt:'Nagtapos si Marco ng high school. Valedictorian.', wait:2200, chars:['marco_adult'] },
+  { sc:'railway', txt:'Hindi dahil matalino ako... kundi dahil wala akong pagpipilian.', wait:2400, chars:['marco_adult'] },
+  { sc:'railway', txt:'Alam ko kasi — na ang bawat pagpupuyat ko...', wait:2000, chars:['marco_adult'] },
+  { sc:'railway', txt:'...ay bayad sa bawat patak ng pawis niya.', wait:2400, chars:['marco_adult'] },
+  { sc:'study', bgm:'somber', txt:'Isang gabi. May hawak na sulat si Nanay. Scholarship letter.', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'Nanginginig ang kamay.', wait:1800, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Marco... anak... nakapasok ka. Sa Maynila. Scholar."', who:'NANAY', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Anak... hindi ko... hindi ko alam kung paano..."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Nay, hindi ako aalis kung hindi ka sasama."', who:'MARCO (18)', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Anak... hindi ako pwede. Alam mo \'yan. Wala tayong pera."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Tsaka — paano yung labada ko? Paano yung mga tao dito na umaasa sa akin?"', who:'NANAY', wait:2800, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'Hinawakan ni Nanay ang mukha ni Marco. Matagal. Puno ng pagmamahal.', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Marco... ang pangarap ko... hindi yung maging mayaman ako."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Ang pangarap ko... yung makita kang umaangat."', who:'NANAY', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Yung makita kang... hindi na nahihirapan."', who:'NANAY', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Yung tipong... kapag nakita ko \'yon... okay na ako."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'study', txt:'"Kahit wala na akong iba pang matanggap."', who:'NANAY', wait:2800, chars:['nanay','marco_adult'] },
+  { sc:'bus', bgm:'somber', txt:'Istasyon ng bus. Umaga. Mabigat ang bag ni Nanay — puno ng pagkain.', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Anak... yung tuyo, nilagay ko sa taas. Yung bigas, sa gitna."', who:'NANAY', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Yung panyo mo — yung puti — nilagay ko sa bulsa ng bag mo."', who:'NANAY', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Yung panyo na \'yon... bigay ng tatay mo sa akin. Bago siya nawala."', who:'NANAY', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Ingatan mo."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Nay, bakit mo naman binibigay sa akin? Eh alaala mo \'yon."', who:'MARCO (18)', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Kasi... anak... hindi ko kailangan ng bagay para maalala siya."', who:'NANAY', wait:2800, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Pero ikaw... kailangan mo ng paalala."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Na... kahit malayo ka... may nagmamahal sa\'yo. May naghihintay sa\'yo."', who:'NANAY', wait:2800, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Nay... babalik ako. Pangako. Pagkatapos ng pag-aaral ko."', who:'MARCO (18)', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Alam ko, anak. Alam ko."', who:'NANAY', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Mag-aral ka lang. Huwag mo akong alalahanin."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'"Nandito lang ako. Palagi. Naghihintay."', who:'NANAY', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'bus', txt:'Umandar ang bus. Tumakbo nang kaunti si Nanay.', wait:2200, chars:['nanay'] },
+  { sc:'bus', txt:'Tapos tumigil. Nakatayo lang. Nakatingin.', wait:2200, chars:['nanay'] },
+  { sc:'bus', txt:'Hanggang sa mawala ang bus sa malayo.', wait:2600, chars:['nanay'] },
+  { sc:'bus', txt:'\'Yun pala ang huling beses na nakita ko siyang nakatayo sa gilid ng kalsada.', wait:2800, chars:['marco_adult'] },
+  { sc:'bus', txt:'Kung alam ko lang... kung alam ko lang...', wait:2200, chars:['marco_adult'] },
+  { sc:'bus', txt:'...hindi na ako sumakay.', wait:2800, chars:['marco_adult'] },
+
+  { sc:'manila', bgm:'hollow', txt:'Maynila. Mabilis ang buhay.', wait:2000, chars:['marco_adult'] },
+  { sc:'manila', txt:'Nag-aral si Marco. Nagtrabaho. Umunlad.', wait:2200, chars:['marco_adult'] },
+  { sc:'manila', txt:'Nagbago ang mga damit niya.', wait:1800, chars:['marco_adult'] },
+  { sc:'manila', txt:'Nagbago ang telepono niya.', wait:1800, chars:['marco_adult'] },
+  { sc:'manila', txt:'Nagbago ang ngiti niya — naging mas malamig. Mas malayo.', wait:2800, chars:['marco_adult'] },
+  { sc:'manila', txt:'Una, tumatawag ako every week.', wait:2000, chars:['marco_adult'] },
+  { sc:'manila', txt:'Tapos... every two weeks. Tapos... every month.', wait:2400, chars:['marco_adult'] },
+  { sc:'manila', txt:'Tapos... tuwing may okasyon na lang.', wait:2200, chars:['marco_adult'] },
+  { sc:'manila', txt:'Tapos... minsan... nakakalimutan ko na.', wait:2800, chars:['marco_adult'] },
+  { sc:'manila', txt:'"Anak... musta ka na? Anak... namimiss kita."', who:'NANAY', wait:2400, chars:['marco_adult'] },
+  { sc:'manila', txt:'"Oo, Nay. Okay lang ako. Busy lang."', who:'MARCO', wait:2200, chars:['marco_adult'] },
+  { sc:'manila', txt:'"Sige, Nay, tatawag na lang ako ulit. Bye."', who:'MARCO', wait:2400, chars:['marco_adult'] },
+  { sc:'manila', txt:'Natahimik ang telepono.', wait:2000, chars:['nanay'] },
+  { sc:'manila', txt:'Nakaupo si Nanay sa tabi nito. Naghihintay.', wait:2200, chars:['nanay'] },
+  { sc:'manila', txt:'Dumating ang gabi. Dumating ang umaga.', wait:2200, chars:['nanay'] },
+  { sc:'manila', txt:'Hindi na ito tumunog muli.', wait:2800, chars:['nanay'] },
+  { sc:'manila', txt:'Hindi ko alam noon na ang bawat \'busy lang ako, Nay\'...', wait:2400, chars:['marco_adult'] },
+  { sc:'manila', txt:'...ay isang piraso ng puso niya na nababasag.', wait:2600, chars:['marco_adult'] },
+  { sc:'manila', txt:'Akala ko naiintindihan niya. Akala ko palagi siyang nandiyan.', wait:2400, chars:['marco_adult'] },
+  { sc:'manila', txt:'Nandiyan nga siya. Pero hindi ko alam na may hangganan pala ang paghihintay.', wait:3000, chars:['marco_adult'] },
+
+  { sc:'rainNight', bgm:'dread', sfx:'rain', txt:'Isang gabi. Malakas ang ulan.', wait:2000 },
+  { sc:'rainNight', txt:'Tumunog ang telepono. Hindi kilalang numero.', wait:2200 },
+  { sc:'rainNight', sfx:'thunder', txt:'Galing probinsya.', wait:1800 },
+  { sc:'rainNight', txt:'"Marco? Anak ni Iska? Ikaw ba si Marco?"', who:'BOSES', wait:2200 },
+  { sc:'rainNight', txt:'"Opo. Sino po ito?"', who:'MARCO', wait:1800 },
+  { sc:'rainNight', txt:'"Anak — si Aling Miding ito. Kapitbahay niyo."', who:'BOSES', wait:2200 },
+  { sc:'rainNight', txt:'"Anak... dinala namin sa ospital ang Nanay mo."', who:'BOSES', wait:2200 },
+  { sc:'rainNight', sfx:'heartbeat_fast', txt:'"Hinimatay siya habang naglalaba."', who:'BOSES', wait:2200 },
+  { sc:'rainNight', txt:'"Sabi ng doktor... hindi na... hindi na tumatagal."', who:'BOSES', wait:2800 },
+  { sc:'rainNight', sfx:'heartbeat_fast', txt:'"Ano po? Hindi po... hindi po ako makapaniwala."', who:'MARCO', wait:2400 },
+  { sc:'rainNight', txt:'"Nay... si Nay... okay lang po ba siya?"', who:'MARCO', wait:2200 },
+  { sc:'rainNight', txt:'"Kailangan ko pong pumunta. Kailangan ko—"', who:'MARCO', wait:2200 },
+  { sc:'rainNight', txt:'"Anak... bilisan mo. Kung kaya — ngayon na."', who:'BOSES', wait:2200 },
+  { sc:'rainNight', txt:'"Kasi... anak... yung oras... hindi na natin hawak."', who:'BOSES', wait:2800 },
+  { sc:'rainNight', txt:'Isang oras bago ang flight. Dalawang oras bago ang bus.', wait:2400 },
+  { sc:'rainNight', txt:'Tatlong oras bago — ang huling pagkakataon.', wait:2600 },
+  { sc:'rainNight', txt:'Nakaupo ako sa taxi. Nakatingin sa bintana.', wait:2200 },
+  { sc:'rainNight', txt:'Hindi ko alam kung maiiyak ako. O magagalit sa sarili ko.', wait:2600 },
+  { sc:'rainNight', txt:'O — wala na lang. Wala nang mararamdaman.', wait:2800 },
+
+  { sc:'hospital', bgm:'grief', txt:'Lumang ospital. Amoy gamot. Tunog ng mga monitor.', wait:2200 },
+  { sc:'hospital', txt:'Malamig — pero hindi talaga malamig.', wait:2000 },
+  { sc:'hospital', txt:'Kahit ang hangin... tila nagluluksa.', wait:2400 },
+  { sc:'hospital', txt:'"Nay..."', who:'MARCO', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'Dumilat si Nanay. Unti-unti.', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'Nakita si Marco. Ngumiti — yung ngiting pagod na pagod na.', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'Pero puno pa rin ng pagmamahal.', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Anak... dumating ka..."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Sabi ko sa kanila... hindi ka na makakarating."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Pero... dumating ka. Salamat, anak. Salamat."', who:'NANAY', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Nay... sorry. Sorry po."', who:'MARCO', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Sorry... hindi ako nakauwi agad."', who:'MARCO', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Anak... wag ka mag-sorry. Alam ko... busy ka."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Alam ko... mahirap ang buhay."', who:'NANAY', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Alam ko... anak... alam ko lahat."', who:'NANAY', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'hospital', sfx:'heartbeat', txt:'"Anak... yung panyo... yung puti... nandiyan pa ba?"', who:'NANAY', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Nay... nawala po. Sorry. Nawala. Hindi ko—"', who:'MARCO', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Okay lang, anak. Okay lang."', who:'NANAY', wait:2000, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Hindi \'yon ang importante. Ang importante... nandito ka."', who:'NANAY', wait:2400, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Nandito ka... sa tabi ko. \'Yun lang ang kailangan ko."', who:'NANAY', wait:2800, chars:['nanay','marco_adult'] },
+  { sc:'hospital', sfx:'heartbeat_fast', txt:'"Nay? Nay, wag po. Nay... please... wag po."', who:'MARCO', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Nay... kailangan ko po kayo. Nay... hindi pa po ako ready. Nay—"', who:'MARCO', wait:2800, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Anak... mahal na mahal kita. Mahal na mahal."', who:'NANAY', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Kahit... hindi mo ako binibisita."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Kahit... hindi mo ako tinatawagan."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Kahit... nakalimutan mo ako."', who:'NANAY', wait:2200, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Mahal pa rin kita. Palagi."', who:'NANAY', wait:2600, chars:['nanay','marco_adult'] },
+  { sc:'hospital', txt:'"Ang pangarap ko... anak... ikaw. Palagi... ikaw."', who:'NANAY', wait:3000, chars:['nanay','marco_adult'] },
+  { sc:'hospital', sfx:'flatline', txt:'Bumagsak ang kamay niya. Pumikit ang mata niya.', wait:3000 },
+  { sc:'hospital', txt:'Nakatayo lang si Marco — hindi gumagalaw. Hindi makapaniwala.', wait:3000 },
+  { sc:'hospital', txt:'Dumating ang mga luha. Tahimik. Walang sigaw. Wala.', wait:3000 },
+  { sc:'hospital', txt:'Basta ang kakila-kilabot... kakila-kilabot na katahimikan.', wait:3400 },
+  { sc:'hospital', txt:'\'Yun pala ang huling beses na nakita ko siyang ngumiti.', wait:2800 },
+  { sc:'hospital', txt:'Ang huling beses na naramdaman ko yung kamay niya.', wait:2800 },
+  { sc:'hospital', txt:'Ang huling beses na narinig ko siyang sabihin... na mahal niya ako.', wait:3200 },
+  { sc:'hospital', txt:'At \'yun pala ang huling beses — na hindi ko nasabi...', wait:2800 },
+  { sc:'hospital', txt:'...na mahal ko rin siya. Sobra. Sobrang sobra.', wait:3200 },
+
+  { sc:'letters', bgm:'revelation', sfx:'wind', txt:'Isang linggo pagkatapos ng libing... bumalik si Marco sa bahay nila.', wait:2800 },
+  { sc:'letters', txt:'Ang bahay na hindi niya binisita ng pitong taon.', wait:2800 },
+  { sc:'letters', sfx:'paper', txt:'Sa mesa — mga sulat. Hindi pinadala. Nakabalot sa goma.', wait:2800 },
+  { sc:'letters', txt:'Sampu. Dalawampu. Hindi mabilang.', wait:2600 },
+  { sc:'letters', txt:'Lahat — para sa kanya.', wait:2800 },
+  { sc:'letters', txt:'"Anak, kamusta ka na? Hindi kita matawagan kasi baka busy ka."', who:'NANAY (liham)', wait:3000 },
+  { sc:'letters', txt:'"Gusto ko lang sabihin... na miss na miss kita."', who:'NANAY (liham)', wait:2800 },
+  { sc:'letters', txt:'"Yung bahay... sobrang tahimik. Yung puso ko... puno ng paghihintay."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"Pero okay lang. Alam ko... babalik ka. Palagi kong alam \'yon."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"Anak, may sakit ako. Hindi ko sinabi sa\'yo kasi ayaw kong mag-alala ka."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"Ayaw kong... maging hadlang ako sa mga pangarap mo."', who:'NANAY (liham)', wait:3000 },
+  { sc:'letters', txt:'"Sabi ng doktor... kailangan ko ng gamot. Mahal. Hindi ko kayang bilhin."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"Pero okay lang. Anak... ang mahalaga... ikaw. Palagi... ikaw."', who:'NANAY (liham)', wait:3400 },
+  { sc:'letters', txt:'"Anak... namimiss kita. Sobra."', who:'NANAY (liham)', wait:2800 },
+  { sc:'letters', txt:'"Yung tipong... gusto ko na lang sumakay ng bus papuntang Maynila."', who:'NANAY (liham)', wait:3000 },
+  { sc:'letters', txt:'"Pero... hindi ko alam kung saan ka nakatira."', who:'NANAY (liham)', wait:3000 },
+  { sc:'letters', txt:'"Hindi ko alam... kung paano kita hahanapin."', who:'NANAY (liham)', wait:3000 },
+  { sc:'letters', txt:'"Anak... sorry. Sorry kasi... hindi ako marunong."', who:'NANAY (liham)', wait:3000 },
+  { sc:'letters', txt:'"Sorry kasi... hindi kita maabot. Sorry kasi... hindi ako enough."', who:'NANAY (liham)', wait:3400 },
+  { sc:'letters', txt:'"Anak, kung mababasa mo ito... ibig sabihin... hindi na ako nakapaghintay."', who:'NANAY (liham)', wait:3400 },
+  { sc:'letters', txt:'"Sorry, anak. Sorry kasi... hindi ko natupad yung pangako ko."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"Yung pangakong... palagi akong nandiyan. Anak... sorry."', who:'NANAY (liham)', wait:3400 },
+  { sc:'letters', txt:'"Pero anak... kahit hindi na ako nandiyan..."', who:'NANAY (liham)', wait:3000 },
+  { sc:'letters', txt:'"gusto ko lang... malaman mo... na mahal na mahal kita."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"At... kahit hindi mo ako binisita. Kahit hindi mo ako tinawagan."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"Kahit... nakalimutan mo ako. Hindi ako nagalit. Hindi."', who:'NANAY (liham)', wait:3200 },
+  { sc:'letters', txt:'"Kasi... naiintindihan ko."', who:'NANAY (liham)', wait:2800 },
+  { sc:'letters', txt:'"At... kung may isa lang akong hihilingin... \'yun ay... maging masaya ka."', who:'NANAY (liham)', wait:3400 },
+  { sc:'letters', txt:'"\'Yun lang. Maging masaya ka."', who:'NANAY (liham)', wait:3400 },
+  { sc:'letters', txt:'Nakaupo si Marco sa sahig. Napapalibutan ng mga sulat.', wait:2800, chars:['marco_adult'] },
+  { sc:'letters', txt:'Umiiyak. Yung tipong hindi na tumitigil.', wait:2600, chars:['marco_adult'] },
+  { sc:'letters', txt:'Yung tipong... basag na basag na.', wait:3000, chars:['marco_adult'] },
+  { sc:'letters', txt:'Doon ko nalaman... na yung panyo na binigay niya sa akin...', wait:3000, chars:['marco_adult'] },
+  { sc:'letters', txt:'...hindi lang basta panyo.', wait:2200, chars:['marco_adult'] },
+  { sc:'letters', txt:'\'Yun pala... ang tanging bagay na natira mula sa tatay ko.', wait:3000, chars:['marco_adult'] },
+  { sc:'letters', txt:'At... ibinigay niya sa akin. Kahit... alam niyang... hindi ko maiingatan.', wait:3400, chars:['marco_adult'] },
+  { sc:'letters', txt:'At doon ko nalaman... na yung taong pinakamamahal ko...', wait:3000, chars:['marco_adult'] },
+  { sc:'letters', txt:'...ay yung taong pinakamadalas kong kalimutan.', wait:3400, chars:['marco_adult'] },
+
+  { sc:'grave', bgm:'hope', sfx:'wind', txt:'Libingan. Maaliwalas. Sariwa ang hangin.', wait:2800, chars:['marco_adult'] },
+  { sc:'grave', txt:'Bagong panyo — puti — inilagay sa ibabaw ng lapida.', wait:3000, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Nay... sorry. Sorry sa lahat."', who:'MARCO', wait:2800, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Sorry kasi... hindi ako naging mabuting anak."', who:'MARCO', wait:2800, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Sorry kasi... hindi kita binisita."', who:'MARCO', wait:2600, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Sorry kasi... hindi kita tinawagan."', who:'MARCO', wait:2600, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Sorry kasi... nakalimutan kita."', who:'MARCO', wait:3000, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Nay... gusto ko sanang sabihin... na mahal kita. Sobra."', who:'MARCO', wait:3000, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Pero... hindi ko nasabi. Hindi ko nasabi... hanggang sa huli."', who:'MARCO', wait:3200, chars:['marco_adult'] },
+  { sc:'grave', txt:'"At... \'yun yung pinakamalaking pagsisisi ko."', who:'MARCO', wait:3000, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Nay... pangako. Hindi ko na... kakalimutan."', who:'MARCO', wait:2800, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Hindi ko na... ipagpapabukas."', who:'MARCO', wait:2600, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Hindi ko na... sasabihin na \'busy lang ako.\'"', who:'MARCO', wait:2800, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Kasi... Nay... alam ko na ngayon. Na yung oras... hindi mo hawak."', who:'MARCO', wait:3200, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Na yung pag-ibig... hindi mo pwede ipagpabukas."', who:'MARCO', wait:3000, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Na yung mga taong mahal mo... hindi sila permanente."', who:'MARCO', wait:3400, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Nay... mahal kita. Palagi."', who:'MARCO', wait:2800, chars:['marco_adult'] },
+  { sc:'grave', txt:'"At... kahit hindi na kita kasama... dala-dala kita. Sa puso ko. Palagi."', who:'MARCO', wait:3400, chars:['marco_adult'] },
+  { sc:'grave', txt:'"Pangako \'yan, Nay. Pangako."', who:'MARCO', wait:3400, chars:['marco_adult'] },
+
+  // QUOTES — TAP to continue (no more auto)
+  { sc:'abstract', bgm:'wisdom', isQuote:true, wait:3000, txt:'Time is not a possession to be spent — it is a river, and we are not its owners, only its travelers.' },
+  { sc:'abstract', isQuote:true, wait:3400, txt:'To say "I am here" while being absent is not love. Love demands presence; the body must follow where the heart claims to dwell.' },
+  { sc:'abstract', isQuote:true, wait:3200, txt:'Regret is salt upon a wound — it stings, yet it cleanses. But the wise do not wound themselves twice.' },
+  { sc:'abstract', isQuote:true, wait:3800, txt:'Parents are candles. They burn their own flesh to grant you light. Only when they are consumed do you realize you never thanked them for the flame.' },
+  { sc:'abstract', isQuote:true, wait:3200, txt:'He who merely wishes finds reasons. He who loves finds ways. Love is never "busy" — love is priority.' },
+  { sc:'abstract', isQuote:true, wait:3600, txt:'Forgiveness is not a gift to the offender. It is freedom for the offended — the refusal to let the past govern the future.' },
+  { sc:'abstract', isQuote:true, wait:3400, txt:'True love keeps no ledger. It asks not what it will receive. It gives — even when nothing remains for itself.' },
+  { sc:'abstract', isQuote:true, wait:3800, txt:'Life is a candle in the wind. You know not when it will be taken. While it burns — make it bright. Make it warm. Make it worthy of memory.' },
+  { sc:'abstract', isQuote:true, wait:3600, txt:'The chance to love your parents is not eternal. One day the chance is gone — and no amount of love can then reach them.' },
+  { sc:'abstract', isQuote:true, wait:3400, txt:'Love does not perish. It changes form. Sometimes memory. Sometimes lesson. Sometimes the very reason you rise again.' },
+  { sc:'abstract', isQuote:true, wait:3600, txt:'You need not be perfect to be loved by your parents. But you must give them time — for time is the only gift that cannot be refunded.' },
+  { sc:'abstract', isQuote:true, wait:3400, txt:'Regret is no punishment. It is a teacher. And if you learn, you will not regret again — for you will know what truly matters.' },
+  { sc:'abstract', isQuote:true, wait:4000, txt:'Love is like a plant. It cannot live on words alone. It must be watered with time, tended by presence — or it withers. And what withers cannot be revived.' },
+  { sc:'abstract', isQuote:true, wait:3600, txt:'Time is like water. It flows; it cannot be halted. Drink while it passes — and give to the thirsty before the current takes them.' },
+  { sc:'abstract', isQuote:true, wait:4000, txt:'The opportunity to love is not permanent. Love now. Not tomorrow. Not next time. Now — for now is all you own.' },
+
+  // FINAL — TAP to continue
+  { sc:'sunrise', bgm:'hope', sfx:'chime', isFinal:true, wait:3400, txt:'Para sa lahat ng mga Nanay na naghintay.' },
+  { sc:'sunrise', isFinal:true, wait:4000, txt:'Para sa lahat ng mga anak na hindi nakauwi.' },
+  { sc:'sunrise', isFinal:true, isByline:true, wait:5000, txt:'Adrian Suarez' },
+];
+
+/* ============================================================
+   CHARACTERS
+   ============================================================ */
+function drawNanay(cx, footY, scale, opts={}){
+  const { mood='neutral' } = opts;
+  const s = scale;
+  const breath = Math.sin(G.time*1.3)*0.4;
+  const bx = cx;
+  const by = footY + breath;
+  ctx.fillStyle = '#3a2010';
+  ctx.fillRect(bx - 6*s, by - 30*s, 5*s, 30*s);
+  ctx.fillRect(bx + 1*s, by - 30*s, 5*s, 30*s);
+  ctx.fillStyle = '#1a0e04';
+  ctx.fillRect(bx - 8*s, by - 3*s, 8*s, 3*s);
+  ctx.fillRect(bx + 0*s, by - 3*s, 8*s, 3*s);
+  ctx.fillStyle = '#4a2818';
+  ctx.fillRect(bx - 12*s, by - 65*s, 24*s, 36*s);
+  ctx.fillStyle = '#3a1e10';
+  ctx.fillRect(bx - 12*s, by - 65*s, 24*s, 3*s);
+  ctx.fillRect(bx - 12*s, by - 42*s, 24*s, 3*s);
+  ctx.fillStyle = '#8a7060';
+  ctx.fillRect(bx - 8*s, by - 58*s, 16*s, 26*s);
+  ctx.fillStyle = '#3a1e10';
+  ctx.fillRect(bx - 16*s, by - 62*s, 5*s, 30*s);
+  ctx.fillRect(bx + 11*s, by - 62*s, 5*s, 30*s);
+  ctx.fillStyle = '#c89878';
+  ctx.fillRect(bx - 16*s, by - 32*s, 5*s, 5*s);
+  ctx.fillRect(bx + 11*s, by - 32*s, 5*s, 5*s);
+  ctx.fillRect(bx - 4*s, by - 72*s, 8*s, 8*s);
+  const headY = by - 84*s;
+  ctx.fillStyle = '#d0a080';
+  ctx.beginPath(); ctx.ellipse(bx, headY, 12*s, 14*s, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(80,40,20,0.15)';
+  ctx.beginPath(); ctx.ellipse(bx + 3*s, headY + 2*s, 8*s, 12*s, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#1a1010';
+  ctx.beginPath(); ctx.arc(bx, headY - 6*s, 12*s, Math.PI, Math.PI*2); ctx.fill();
+  ctx.fillRect(bx - 12*s, headY - 6*s, 3*s, 10*s);
+  ctx.fillRect(bx + 9*s, headY - 6*s, 3*s, 10*s);
+  ctx.beginPath(); ctx.arc(bx, headY - 16*s, 5*s, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(100,60,40,0.35)';
+  ctx.fillRect(bx - 9*s, headY + 4*s, 2*s, 1*s);
+  ctx.fillRect(bx + 7*s, headY + 4*s, 2*s, 1*s);
+  const eyeY = headY - 1*s;
+  if (mood === 'sad'){
+    ctx.strokeStyle = '#0a0605'; ctx.lineWidth = 1.2*s;
+    ctx.beginPath(); ctx.moveTo(bx - 7*s, eyeY); ctx.lineTo(bx - 3*s, eyeY - 1*s); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx + 7*s, eyeY); ctx.lineTo(bx + 3*s, eyeY - 1*s); ctx.stroke();
+  } else if (mood === 'smiling'){
+    ctx.strokeStyle = '#0a0605'; ctx.lineWidth = 1.2*s;
+    ctx.beginPath(); ctx.arc(bx - 5*s, eyeY, 2*s, Math.PI, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(bx + 5*s, eyeY, 2*s, Math.PI, Math.PI*2); ctx.stroke();
+  } else {
+    ctx.fillStyle = '#0a0605';
+    ctx.beginPath(); ctx.arc(bx - 5*s, eyeY, 1.2*s, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(bx + 5*s, eyeY, 1.2*s, 0, Math.PI*2); ctx.fill();
+  }
+  const mouthY = headY + 7*s;
+  ctx.strokeStyle = '#5a2828'; ctx.lineWidth = 1*s;
+  if (mood === 'smiling'){
+    ctx.beginPath();
+    ctx.moveTo(bx - 4*s, mouthY);
+    ctx.quadraticCurveTo(bx, mouthY + 2*s, bx + 4*s, mouthY);
+    ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.moveTo(bx - 3*s, mouthY); ctx.lineTo(bx + 3*s, mouthY); ctx.stroke();
+  }
+  G._faceX = bx; G._faceY = eyeY; G._eyeSpacing = 5*s;
+}
+
+function drawMarco(cx, footY, scale, opts={}){
+  const { mood='neutral', age='adult' } = opts;
+  const s = scale;
+  const breath = Math.sin(G.time*1.5)*0.5;
+  const bx = cx;
+  const by = footY + breath;
+  const isChild = age === 'child';
+  const bodyH = isChild ? 60 : 80;
+  const legH = isChild ? 20 : 34;
+  ctx.fillStyle = isChild ? '#3a2818' : '#1a1e28';
+  ctx.fillRect(bx - 5*s, by - legH*s, 4*s, legH*s);
+  ctx.fillRect(bx + 1*s, by - legH*s, 4*s, legH*s);
+  ctx.fillStyle = '#0a0604';
+  ctx.fillRect(bx - 7*s, by - 3*s, 7*s, 3*s);
+  ctx.fillRect(bx + 0*s, by - 3*s, 7*s, 3*s);
+  ctx.fillStyle = isChild ? '#6a8ac8' : '#2a3a50';
+  ctx.fillRect(bx - 10*s, by - bodyH*s, 20*s, bodyH*s - legH*s);
+  ctx.fillStyle = isChild ? '#5a7ab8' : '#1a2a40';
+  ctx.fillRect(bx - 10*s, by - bodyH*s, 20*s, 3*s);
+  ctx.fillStyle = isChild ? '#6a8ac8' : '#2a3a50';
+  ctx.fillRect(bx - 14*s, by - bodyH*s + 4*s, 4*s, (bodyH - legH - 6)*s);
+  ctx.fillRect(bx + 10*s, by - bodyH*s + 4*s, 4*s, (bodyH - legH - 6)*s);
+  ctx.fillStyle = '#c89878';
+  ctx.fillRect(bx - 14*s, by - bodyH*s + 4*s + (bodyH-legH-6)*s, 4*s, 4*s);
+  ctx.fillRect(bx + 10*s, by - bodyH*s + 4*s + (bodyH-legH-6)*s, 4*s, 4*s);
+  ctx.fillRect(bx - 3*s, by - (bodyH + 6)*s, 6*s, 6*s);
+  const headY = by - (bodyH + 16)*s;
+  ctx.fillStyle = '#c8a078';
+  ctx.beginPath(); ctx.ellipse(bx, headY, 10*s, 12*s, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#1a0e08';
+  ctx.beginPath(); ctx.arc(bx, headY - 4*s, 11*s, Math.PI, Math.PI*2); ctx.fill();
+  ctx.fillRect(bx - 11*s, headY - 4*s, 2.5*s, 6*s);
+  ctx.fillRect(bx + 8.5*s, headY - 4*s, 2.5*s, 6*s);
+  const eyeY = headY - 1*s;
+  if (mood === 'sad'){
+    ctx.fillStyle = '#f0e8e0';
+    ctx.beginPath(); ctx.ellipse(bx - 4*s, eyeY, 2.5*s, 1.8*s, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(bx + 4*s, eyeY, 2.5*s, 1.8*s, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1a0a05';
+    ctx.beginPath(); ctx.arc(bx - 4*s, eyeY + 0.3*s, 1*s, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(bx + 4*s, eyeY + 0.3*s, 1*s, 0, Math.PI*2); ctx.fill();
+  } else if (mood === 'smiling'){
+    ctx.strokeStyle = '#1a0a05'; ctx.lineWidth = 1.2*s;
+    ctx.beginPath(); ctx.arc(bx - 4*s, eyeY, 2.2*s, Math.PI, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(bx + 4*s, eyeY, 2.2*s, Math.PI, Math.PI*2); ctx.stroke();
+  } else {
+    ctx.fillStyle = '#f0e8e0';
+    ctx.beginPath(); ctx.ellipse(bx - 4*s, eyeY, 2.5*s, 1.8*s, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(bx + 4*s, eyeY, 2.5*s, 1.8*s, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1a0a05';
+    ctx.beginPath(); ctx.arc(bx - 4*s, eyeY, 1.1*s, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(bx + 4*s, eyeY, 1.1*s, 0, Math.PI*2); ctx.fill();
+  }
+  const mouthY = headY + 6*s;
+  ctx.strokeStyle = '#5a2828'; ctx.lineWidth = 1.1*s;
+  if (mood === 'smiling'){
+    ctx.beginPath();
+    ctx.moveTo(bx - 3*s, mouthY);
+    ctx.quadraticCurveTo(bx, mouthY + 3*s, bx + 3*s, mouthY);
+    ctx.stroke();
+  } else if (mood === 'sad'){
+    ctx.beginPath();
+    ctx.moveTo(bx - 3*s, mouthY + 1*s);
+    ctx.quadraticCurveTo(bx, mouthY - 1*s, bx + 3*s, mouthY + 1*s);
+    ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.moveTo(bx - 2*s, mouthY); ctx.lineTo(bx + 2*s, mouthY); ctx.stroke();
+  }
+  G._faceX = bx; G._faceY = eyeY; G._eyeSpacing = 4*s;
+}
+
+/* ============================================================
+   GRADIENTS
+   ============================================================ */
+function gradV(y0,y1, stops){
+  const g = ctx.createLinearGradient(0,y0,0,y1);
+  for (const s of stops) g.addColorStop(s[0], s[1]);
+  return g;
+}
+function gradR(cx,cy,r0,r1, stops){
+  const g = ctx.createRadialGradient(cx,cy,r0,cx,cy,r1);
+  for (const s of stops) g.addColorStop(s[0], s[1]);
+  return g;
+}
+
+/* ============================================================
+   SCENES
+   ============================================================ */
+function hasChar(id){
+  const s = STORY[G.storyIdx];
+  if (!s || !s.chars) return false;
+  return s.chars.includes(id);
+}
+
+function sceneBlack(){ R(0,0,W,H,'#000'); }
+
+function sceneRailway(){
+  ctx.fillStyle = gradV(0, H*0.6, [[0,'#2a1810'],[0.6,'#6a3a1a'],[1,'#d4783a']]);
+  ctx.fillRect(0,0,W,H*0.6);
+  ctx.fillStyle = gradR(W*0.7, H*0.5, 20, 180, [[0,'rgba(255,200,120,0.6)'],[1,'rgba(255,200,120,0)']]);
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = '#1a0e08';
+  ctx.beginPath();
+  ctx.moveTo(0, H*0.55);
+  ctx.lineTo(W*0.15, H*0.48); ctx.lineTo(W*0.35, H*0.52);
+  ctx.lineTo(W*0.55, H*0.46); ctx.lineTo(W*0.75, H*0.50);
+  ctx.lineTo(W, H*0.48); ctx.lineTo(W, H*0.6); ctx.lineTo(0, H*0.6);
+  ctx.closePath(); ctx.fill();
+  const shX = W*0.65, shY = H*0.42, shW = 100, shH = 90;
+  ctx.fillStyle = '#0a0604';
+  ctx.beginPath();
+  ctx.moveTo(shX, shY + shH); ctx.lineTo(shX, shY + 25);
+  ctx.lineTo(shX + shW*0.5, shY); ctx.lineTo(shX + shW, shY + 25);
+  ctx.lineTo(shX + shW, shY + shH); ctx.closePath(); ctx.fill();
+  R(shX + 20, shY + 45, 20, 20, '#3a2418');
+  R(shX + 22, shY + 47, 16, 16, '#f0a050');
+  R(shX + 30, shY + 12, 30, 6, '#3a2418');
+  ctx.fillStyle = gradV(H*0.6, H, [[0,'#2a1a0e'],[1,'#0a0604']]);
+  ctx.fillRect(0, H*0.6, W, H*0.4);
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(0, H*0.72, W, 2);
+  ctx.fillRect(0, H*0.78, W, 2);
+  ctx.fillRect(0, H*0.84, W, 2);
+  if (hasChar('nanay')) drawNanay(W*0.35, H*0.82, 1.1, { mood:'smiling' });
+  if (hasChar('marco_child')) drawMarco(W*0.55, H*0.85, 0.9, { mood:'smiling', age:'child' });
+  if (hasChar('marco_adult')) drawMarco(W*0.55, H*0.85, 1.05, { mood:'neutral', age:'adult' });
+  ctx.fillStyle = gradR(W/2, H*0.7, 80, 400, [[0,'rgba(255,200,120,0.15)'],[1,'rgba(255,200,120,0)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneKitchen(){
+  ctx.fillStyle = gradV(0, H*0.75, [[0,'#3a2418'],[1,'#1a0e08']]);
+  ctx.fillRect(0,0,W,H*0.75);
+  ctx.fillStyle = gradV(H*0.75, H, [[0,'#2a1a0e'],[1,'#0a0604']]);
+  ctx.fillRect(0, H*0.75, W, H*0.25);
+  R(0, H*0.75-2, W, 2, '#1a0e08');
+
+  const wx = 25, wy = 50, ww = 110, wh = 130;
+  R(wx-3, wy-3, ww+6, wh+6, '#2a1808');
+  ctx.fillStyle = gradV(wy, wy+wh, [[0,'#ffe0a0'],[0.6,'#ffb870'],[1,'#e88040']]);
+  ctx.fillRect(wx, wy, ww, wh);
+  ctx.fillStyle = 'rgba(255,240,180,0.95)';
+  ctx.beginPath(); ctx.arc(wx + ww*0.4, wy + wh*0.4, 13, 0, Math.PI*2); ctx.fill();
+  R(wx + ww/2 - 2, wy, 4, wh, '#2a1808');
+  R(wx, wy + wh/2 - 2, ww, 4, '#2a1808');
+
+  ctx.fillStyle = gradV(wy, H, [[0,'rgba(255,220,150,0.28)'],[1,'rgba(255,220,150,0)']]);
+  ctx.beginPath();
+  ctx.moveTo(wx, wy+wh); ctx.lineTo(wx+ww, wy+wh);
+  ctx.lineTo(wx+ww+100, H); ctx.lineTo(wx-100, H);
+  ctx.closePath(); ctx.fill();
+
+  for (let i=0;i<25;i++){
+    const p = (G.time*0.3 + i*0.17) % 1;
+    const x = wx - 40 + p*240;
+    const y = wy + p*400;
+    ctx.fillStyle = `rgba(255,240,200,${0.5*(1-p)})`;
+    ctx.fillRect(x|0, y|0, 1, 1);
+  }
+
+  const sX = W*0.55, sY = H*0.58, sW = 140, sH = 75;
+  ctx.fillStyle = '#5a3a24';
+  ctx.fillRect(sX, sY, sW, sH);
+  ctx.fillStyle = '#6a4a30';
+  ctx.fillRect(sX, sY, sW, 6);
+  ctx.fillStyle = '#1a1210';
+  ctx.fillRect(sX + 5, sY - 4, sW - 10, 10);
+  ctx.fillStyle = '#0a0604';
+  ctx.beginPath();
+  ctx.ellipse(sX + sW/2, sY - 2, 34, 10, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  for (let i=0;i<5;i++){
+    const fx = sX + sW/2 - 30 + i*15;
+    const flicker = Math.sin(G.time*10 + i*1.5)*3;
+    const fh = 14 + Math.sin(G.time*7 + i)*4;
+    ctx.fillStyle = 'rgba(255,140,40,0.9)';
+    ctx.beginPath();
+    ctx.moveTo(fx - 5, sY + 4);
+    ctx.quadraticCurveTo(fx, sY - fh + flicker, fx + 5, sY + 4);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,220,80,0.9)';
+    ctx.beginPath();
+    ctx.moveTo(fx - 2, sY + 2);
+    ctx.quadraticCurveTo(fx, sY - fh*0.6 + flicker, fx + 2, sY + 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = gradR(sX + sW/2, sY - 5, 10, 90, [[0,'rgba(255,160,60,0.55)'],[1,'rgba(255,160,60,0)']]);
+  ctx.fillRect(0,0,W,H);
+
+  const pX = sX + sW/2;
+  const pY = sY - 34;
+  ctx.fillStyle = '#3a2a20';
+  ctx.beginPath();
+  ctx.moveTo(pX - 30, pY + 28);
+  ctx.lineTo(pX + 30, pY + 28);
+  ctx.lineTo(pX + 26, pY - 8);
+  ctx.lineTo(pX - 26, pY - 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#6a5040';
+  ctx.beginPath();
+  ctx.moveTo(pX - 28, pY + 24);
+  ctx.lineTo(pX - 22, pY - 6);
+  ctx.lineTo(pX - 16, pY - 6);
+  ctx.lineTo(pX - 22, pY + 24);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#7a6050';
+  ctx.fillRect(pX - 30, pY - 10, 60, 5);
+  ctx.fillStyle = '#8a7060';
+  ctx.fillRect(pX - 30, pY - 10, 60, 2);
+  ctx.fillStyle = '#5a3010';
+  ctx.beginPath();
+  ctx.ellipse(pX, pY - 8, 26, 5, 0, 0, Math.PI*2);
+  ctx.fill();
+  for (let i=0;i<3;i++){
+    const bx = pX - 15 + i*15 + Math.sin(G.time*3 + i)*2;
+    const by = pY - 8 + Math.cos(G.time*4 + i)*1;
+    ctx.fillStyle = `rgba(255,200,140,${0.4 + Math.sin(G.time*5 + i)*0.3})`;
+    ctx.beginPath(); ctx.arc(bx, by, 2, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.strokeStyle = '#3a2418'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(pX - 32, pY + 10, 7, -Math.PI/2, Math.PI/2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(pX + 32, pY + 10, 7, Math.PI/2, -Math.PI/2);
+  ctx.stroke();
+
+  for (let i=0;i<5;i++){
+    const sy = (G.time*22 + i*14) % 70;
+    ctx.fillStyle = `rgba(240,230,210,${0.28*(1-sy/70)})`;
+    ctx.beginPath();
+    ctx.arc(pX + Math.sin(G.time*0.8+i)*6, pY - 20 - sy, 4 + sy*0.25, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  if (hasChar('nanay')) drawNanay(W*0.28, H*0.92, 1.05, { mood:'smiling' });
+  if (hasChar('marco_child')) drawMarco(W*0.72, H*0.95, 0.85, { mood:'smiling', age:'child' });
+
+  ctx.fillStyle = gradR(W/2, H*0.5, 80, 400, [[0,'rgba(255,200,120,0.18)'],[1,'rgba(255,200,120,0)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneStudy(){
+  R(0,0,W,H,'#0a0604');
+  ctx.fillStyle = gradR(W*0.7, H*0.4, 30, 300, [[0,'rgba(255,200,120,0.35)'],[1,'rgba(255,200,120,0)']]);
+  ctx.fillRect(0,0,W,H);
+  R(0, H*0.7, W, 20, '#2a1808');
+  R(0, H*0.7, W, 3, '#3a2418');
+  const lx = W*0.7, ly = H*0.5;
+  R(lx - 2, ly, 4, 80, '#2a1a10');
+  ctx.fillStyle = '#4a2a14';
+  ctx.beginPath();
+  ctx.moveTo(lx - 30, ly - 10); ctx.lineTo(lx + 30, ly - 10);
+  ctx.lineTo(lx + 20, ly + 5); ctx.lineTo(lx - 20, ly + 5);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f0b060';
+  ctx.beginPath();
+  ctx.moveTo(lx - 28, ly - 8); ctx.lineTo(lx + 28, ly - 8);
+  ctx.lineTo(lx + 18, ly + 3); ctx.lineTo(lx - 18, ly + 3);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = gradR(lx, ly + 30, 20, 200, [[0,'rgba(255,180,90,0.4)'],[1,'rgba(255,180,90,0)']]);
+  ctx.fillRect(0,0,W,H);
+  if (hasChar('nanay')) drawNanay(W*0.35, H*0.88, 1.05, { mood:'smiling' });
+  if (hasChar('marco_child')) drawMarco(W*0.7, H*0.9, 0.85, { mood:'neutral', age:'child' });
+  if (hasChar('marco_adult')) drawMarco(W*0.7, H*0.9, 1.05, { mood:'neutral', age:'adult' });
+  ctx.fillStyle = gradR(W/2, H/2, H*0.3, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.7)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneBus(){
+  ctx.fillStyle = gradV(0, H*0.55, [[0,'#2a1a2a'],[0.5,'#6a3a3a'],[1,'#e09050']]);
+  ctx.fillRect(0,0,W,H*0.55);
+  ctx.fillStyle = gradR(W*0.35, H*0.5, 20, 220, [[0,'rgba(255,180,100,0.65)'],[1,'rgba(255,180,100,0)']]);
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = '#1a1018';
+  ctx.beginPath();
+  ctx.moveTo(0, H*0.55);
+  ctx.lineTo(W*0.2, H*0.50);
+  ctx.lineTo(W*0.5, H*0.53);
+  ctx.lineTo(W*0.8, H*0.48);
+  ctx.lineTo(W, H*0.52);
+  ctx.lineTo(W, H*0.6);
+  ctx.lineTo(0, H*0.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = gradV(H*0.55, H, [[0,'#2a1a10'],[1,'#0a0604']]);
+  ctx.fillRect(0, H*0.55, W, H*0.45);
+  ctx.fillStyle = '#3a2a1a';
+  ctx.fillRect(0, H*0.72, W, H*0.04);
+  ctx.fillStyle = '#4a3a24';
+  ctx.fillRect(0, H*0.72, W, 2);
+  for (let i=0;i<9;i++){
+    ctx.fillStyle = '#5a4a2a';
+    ctx.fillRect(i*42, H*0.735, 22, 2);
+  }
+  const bW = 140, bH = 65;
+  const bX = W*0.42;
+  const roadY = H*0.72;
+  const bY = roadY - bH - 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath();
+  ctx.ellipse(bX + bW/2, roadY + 3, bW*0.52, 6, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#050302';
+  ctx.beginPath(); ctx.arc(bX + 28, roadY, 11, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(bX + bW - 28, roadY, 11, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#3a3028';
+  ctx.beginPath(); ctx.arc(bX + 28, roadY, 4, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(bX + bW - 28, roadY, 4, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#0a0606';
+  ctx.fillRect(bX, bY, bW, bH + 8);
+  R(bX, bY, bW, 3, '#2a2018');
+  R(bX, bY + bH + 5, bW, 3, '#1a1210');
+  R(bX + 12, bY + 12, 34, 26, '#3a2a1a');
+  R(bX + 54, bY + 12, 34, 26, '#3a2a1a');
+  R(bX + 96, bY + 12, 34, 26, '#3a2a1a');
+  R(bX + 12, bY + 12, 34, 2, '#5a4a3a');
+  R(bX + 54, bY + 12, 34, 2, '#5a4a3a');
+  R(bX + 96, bY + 12, 34, 2, '#5a4a3a');
+  R(bX + 2, bY + 12, 8, 26, '#1a1210');
+  R(bX, bY + bH - 12, bW, 3, '#4a3424');
+  ctx.fillStyle = '#f0c878';
+  ctx.fillRect(bX - 3, bY + bH - 16, 5, 6);
+  ctx.fillStyle = '#a02020';
+  ctx.fillRect(bX + bW - 2, bY + bH - 16, 5, 6);
+  for (let i=0;i<4;i++){
+    const px = (G.time*30 + i*25) % 200;
+    const py = roadY - 5 + Math.sin(G.time*2 + i)*3;
+    ctx.fillStyle = `rgba(180,180,180,${0.3*(1-px/200)})`;
+    ctx.beginPath();
+    ctx.arc(bX + bW + 10 + px, py, 5 + px*0.05, 0, Math.PI*2);
+    ctx.fill();
+  }
+  if (hasChar('nanay')) drawNanay(W*0.12, H*0.88, 1.05, { mood:'sad' });
+  if (hasChar('marco_adult')) drawMarco(W*0.32, H*0.9, 1.0, { mood:'neutral', age:'adult' });
+  ctx.fillStyle = gradR(W/2, H/2, H*0.3, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.55)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneManila(){
+  ctx.fillStyle = gradV(0, H, [[0,'#080810'],[0.6,'#141428'],[1,'#050408']]);
+  ctx.fillRect(0,0,W,H);
+  const buildings = [
+    [10, 220, 40, 420],[55, 180, 50, 460],[110, 260, 35, 380],
+    [150, 200, 55, 440],[210, 240, 45, 400],[260, 160, 55, 480],
+    [320, 230, 40, 410],
+  ];
+  for (const [x, y, w, h] of buildings){
+    R(x, y, w, h, '#0a0a16');
+    for (let wy = y + 12; wy < y + h - 8; wy += 16){
+      for (let wx = x + 6; wx < x + w - 6; wx += 12){
+        if (Math.random() > 0.55){
+          ctx.fillStyle = `rgba(240,200,120,${0.5 + Math.random()*0.3})`;
+          ctx.fillRect(wx, wy, 4, 6);
+        }
+      }
+    }
+  }
+  ctx.fillStyle = 'rgba(40,60,120,0.20)';
+  ctx.fillRect(0,0,W,H);
+  if (hasChar('marco_adult')) drawMarco(W*0.5, H*0.92, 1.15, { mood:'neutral', age:'adult' });
+  ctx.fillStyle = gradR(W/2, H/2, H*0.3, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.7)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneRainNight(){
+  ctx.fillStyle = gradV(0, H, [[0,'#080810'],[1,'#020204']]);
+  ctx.fillRect(0,0,W,H);
+  R(30, 60, 300, 400, '#0a0604');
+  ctx.fillStyle = '#0a0a18';
+  ctx.fillRect(35, 65, 290, 390);
+  for (let i=0;i<8;i++){
+    const wx = 45 + i*36;
+    const wy = 300 + Math.random()*80;
+    R(wx, wy, 20, 100, '#1a1a2e');
+    for (let j=0;j<6;j++){
+      ctx.fillStyle = `rgba(240,200,120,${0.5+Math.random()*0.3})`;
+      ctx.fillRect(wx + 3, wy + 10 + j*15, 3, 5);
+    }
+  }
+  R(175, 65, 8, 390, '#0a0604');
+  R(35, 255, 290, 6, '#0a0604');
+  for (let i=0;i<50;i++){
+    const rx = (i*37 + G.time*30) % 290 + 35;
+    const ry = (i*17 + G.time*200) % 390 + 65;
+    ctx.fillStyle = `rgba(180,200,220,${0.10 + (i%4)*0.04})`;
+    ctx.fillRect(rx|0, ry|0, 1, 6);
+  }
+  ctx.strokeStyle = 'rgba(180,200,230,0.15)';
+  ctx.lineWidth = 1;
+  for (let i=0;i<60;i++){
+    const rx = (i*29 + G.time*80) % W;
+    const ry = (i*13 + G.time*500) % H;
+    ctx.beginPath();
+    ctx.moveTo(rx, ry);
+    ctx.lineTo(rx - 3, ry + 10);
+    ctx.stroke();
+  }
+  if (hasChar('marco_adult')) drawMarco(W*0.15, H*0.95, 1.1, { mood:'sad', age:'adult' });
+  ctx.fillStyle = gradR(W/2, H/2, H*0.3, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.75)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+/* ============================================================
+   HOSPITAL — Nanay lying properly on the bed
+   ============================================================ */
+function sceneHospital(){
+  // Wall
+  ctx.fillStyle = gradV(0, H*0.75, [[0,'#1a2430'],[1,'#0a1018']]);
+  ctx.fillRect(0,0,W,H*0.75);
+  // Floor
+  ctx.fillStyle = gradV(H*0.75, H, [[0,'#0e1418'],[1,'#050708']]);
+  ctx.fillRect(0, H*0.75, W, H*0.25);
+  // Fluorescent light
+  ctx.fillStyle = gradR(W/2, 0, 20, 300, [[0,'rgba(180,210,240,0.35)'],[1,'rgba(180,210,240,0)']]);
+  ctx.fillRect(0,0,W,H);
+  R(W*0.3, 40, W*0.4, 6, '#0a1018');
+  R(W*0.32, 42, W*0.36, 2, '#c8d8e0');
+
+  // ===== BED =====
+  const bedX = 40;
+  const bedY = H*0.55;       // top of mattress
+  const bedW = 280;
+  const bedH = 30;            // mattress thickness
+  const legH = 60;
+  const legY = bedY + bedH;
+
+  // Bed frame (metal, thin dark line)
+  R(bedX - 6, bedY - 4, bedW + 12, 6, '#1a1e24'); // headboard top bar
+  R(bedX - 4, bedY - 4, 6, bedH + 20, '#1a1e24'); // left rail
+  R(bedX + bedW - 2, bedY - 4, 6, bedH + 20, '#1a1e24'); // right rail
+
+  // Mattress
+  R(bedX, bedY, bedW, bedH, '#3a4658');
+  R(bedX, bedY, bedW, 4, '#4a5868');
+  R(bedX, bedY + bedH - 4, bedW, 4, '#2a3542');
+
+  // Legs
+  R(bedX - 4, legY, 6, legH, '#0a0d10');
+  R(bedX + bedW - 2, legY, 6, legH, '#0a0d10');
+  // Cross brace
+  R(bedX + 10, legY + 20, bedW - 20, 3, '#0a0d10');
+
+  // Pillow (on left, at head of bed)
+  const pillX = bedX + 10;
+  const pillY = bedY - 18;
+  const pillW = 62;
+  const pillH = 26;
+  R(pillX, pillY, pillW, pillH, '#e8e4d8');
+  R(pillX, pillY, pillW, 3, '#f0ece0');
+  R(pillX, pillY + pillH - 3, pillW, 3, '#c8c4b8');
+  // Pillow indent
+  ctx.fillStyle = 'rgba(200,196,184,0.6)';
+  ctx.beginPath();
+  ctx.ellipse(pillX + pillW/2, pillY + pillH/2, 24, 8, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // ===== NANAY (lying down, head on pillow) =====
+  const headCX = pillX + pillW/2;
+  const headCY = pillY + 8;
+  const headR = 14;
+
+  // Hair pooled behind head (on pillow)
+  ctx.fillStyle = '#1a1010';
+  ctx.beginPath();
+  ctx.ellipse(headCX - 14, headCY + 2, 16, 12, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = '#d0a080';
+  ctx.beginPath();
+  ctx.ellipse(headCX, headCY, headR, 14, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Cheek shadow
+  ctx.fillStyle = 'rgba(80,40,20,0.18)';
+  ctx.beginPath();
+  ctx.ellipse(headCX + 6, headCY + 3, 7, 9, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Hair (top of head)
+  ctx.fillStyle = '#1a1010';
+  ctx.beginPath();
+  ctx.arc(headCX, headCY - 4, headR + 1, Math.PI, Math.PI*2);
+  ctx.fill();
+  // Hair bun (loose, behind)
+  ctx.beginPath();
+  ctx.arc(headCX - 18, headCY + 2, 5, 0, Math.PI*2);
+  ctx.fill();
+  // Some hair strands around head
+  ctx.beginPath();
+  ctx.arc(headCX + 14, headCY + 4, 4, 0, Math.PI*2);
+  ctx.fill();
+
+  // Eyes (closed — sleeping)
+  ctx.strokeStyle = '#0a0605'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(headCX - 7, headCY + 1);
+  ctx.quadraticCurveTo(headCX - 5, headCY + 3, headCX - 3, headCY + 1);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(headCX + 3, headCY + 1);
+  ctx.quadraticCurveTo(headCX + 5, headCY + 3, headCX + 7, headCY + 1);
+  ctx.stroke();
+
+  // Eyebrows (soft)
+  ctx.strokeStyle = 'rgba(90,60,40,0.5)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(headCX - 8, headCY - 4);
+  ctx.lineTo(headCX - 3, headCY - 4);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(headCX + 3, headCY - 4);
+  ctx.lineTo(headCX + 8, headCY - 4);
+  ctx.stroke();
+
+  // Nose (small dot)
+  ctx.fillStyle = 'rgba(100,60,40,0.4)';
+  ctx.fillRect(headCX, headCY + 3, 1, 2);
+
+  // Mouth — weak smile
+  ctx.strokeStyle = '#5a2828'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(headCX - 4, headCY + 8);
+  ctx.quadraticCurveTo(headCX, headCY + 10, headCX + 4, headCY + 8);
+  ctx.stroke();
+
+  // Wrinkles (gentle)
+  ctx.fillStyle = 'rgba(100,60,40,0.28)';
+  ctx.fillRect(headCX - 9, headCY + 6, 3, 1);
+  ctx.fillRect(headCX + 7, headCY + 6, 3, 1);
+
+  // Neck
+  R(headCX + 12, headCY + 6, 8, 8, '#c89878');
+
+  // ===== BODY (under blanket) =====
+  const bodyX = headCX + 18;
+  const bodyY = bedY + 2;
+  const bodyW = 180;
+  const bodyH = bedH - 4;
+
+  // Blanket (covers body from chest down)
+  R(bodyX, bodyY, bodyW, bodyH, '#3a4858');
+  R(bodyX, bodyY, bodyW, 4, '#4a5868');
+  R(bodyX, bodyY + bodyH - 4, bodyW, 4, '#2a3542');
+  // Blanket folds
+  ctx.fillStyle = 'rgba(20,30,40,0.35)';
+  ctx.fillRect(bodyX + 30, bodyY, 2, bodyH);
+  ctx.fillRect(bodyX + 80, bodyY, 2, bodyH);
+  ctx.fillRect(bodyX + 130, bodyY, 2, bodyH);
+
+  // Blanket edge at chest (curved)
+  ctx.fillStyle = '#4a5868';
+  ctx.beginPath();
+  ctx.moveTo(bodyX, bodyY);
+  ctx.quadraticCurveTo(bodyX - 8, bodyY + 8, bodyX, bodyY + 10);
+  ctx.lineTo(bodyX, bodyY);
+  ctx.closePath();
+  ctx.fill();
+
+  // ===== ARM / HAND resting on top of blanket =====
+  // Shoulder/arm visible from chest, hand on top of blanket
+  const armStartX = bodyX - 6;
+  const armStartY = bodyY + 8;
+  // Upper arm (shoulder) — small shape under the blanket edge
+  R(armStartX, armStartY, 14, 10, '#c89878');
+  // Forearm going down the side of the blanket
+  R(armStartX - 10, armStartY + 6, 10, 22, '#c89878');
+  // Hand (open, resting on the side)
+  ctx.fillStyle = '#d0a888';
+  ctx.beginPath();
+  ctx.ellipse(armStartX - 6, armStartY + 32, 7, 8, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Fingers (subtle lines)
+  ctx.strokeStyle = 'rgba(90,50,30,0.4)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(armStartX - 10, armStartY + 30); ctx.lineTo(armStartX - 2, armStartY + 30); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(armStartX - 10, armStartY + 34); ctx.lineTo(armStartX - 2, armStartY + 34); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(armStartX - 10, armStartY + 38); ctx.lineTo(armStartX - 4, armStartY + 38); ctx.stroke();
+  // Wrinkle/highlight on hand
+  ctx.fillStyle = 'rgba(255,220,180,0.25)';
+  ctx.beginPath(); ctx.ellipse(armStartX - 5, armStartY + 30, 3, 4, 0, 0, Math.PI*2); ctx.fill();
+
+  // Blanket over arm bottom
+  ctx.fillStyle = '#3a4858';
+  ctx.beginPath();
+  ctx.moveTo(armStartX - 12, armStartY + 42);
+  ctx.lineTo(armStartX + 10, armStartY + 42);
+  ctx.lineTo(armStartX + 10, armStartY + 50);
+  ctx.lineTo(armStartX - 12, armStartY + 50);
+  ctx.closePath();
+  ctx.fill();
+
+  // ===== MONITOR (top right) =====
+  const mX = W - 100, mY = 100;
+  R(mX, mY, 80, 60, '#0a1014');
+  R(mX + 2, mY + 2, 76, 56, '#0a1418');
+  ctx.strokeStyle = '#4ae0a0';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  const isFlat = G.text.full && G.text.full.includes('Bumagsak');
+  if (isFlat){
+    ctx.moveTo(mX + 5, mY + 30);
+    ctx.lineTo(mX + 75, mY + 30);
+    ctx.globalAlpha = 0.6 + Math.sin(G.time*8)*0.3;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.moveTo(mX + 5, mY + 30);
+    for (let i=0;i<8;i++){
+      const x = mX + 5 + i*9;
+      ctx.lineTo(x, mY + 30);
+      ctx.lineTo(x + 2, mY + 20);
+      ctx.lineTo(x + 4, mY + 40);
+      ctx.lineTo(x + 6, mY + 30);
+    }
+    ctx.stroke();
+  }
+
+  // ===== IV DRIP (left) =====
+  const ivX = 50, ivY = 100;
+  R(ivX - 2, ivY, 4, 200, '#1a1e24');
+  R(ivX - 12, ivY - 10, 24, 30, '#2a3a44');
+  R(ivX - 10, ivY - 8, 20, 26, '#4a6a7a');
+  ctx.fillStyle = 'rgba(180,210,220,0.5)';
+  ctx.beginPath(); ctx.arc(ivX, ivY + 5, 3, 0, Math.PI*2); ctx.fill();
+  // IV line going down to bed
+  ctx.strokeStyle = 'rgba(200,220,230,0.4)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(ivX, ivY + 30);
+  ctx.quadraticCurveTo(ivX + 20, ivY + 100, ivX + 60, ivY + 180);
+  ctx.stroke();
+
+  // ===== MARCO (standing beside bed) =====
+  if (hasChar('marco_adult')) drawMarco(W*0.82, H*0.88, 1.0, { mood:'sad', age:'adult' });
+
+  // Cold vignette
+  ctx.fillStyle = gradR(W/2, H/2, H*0.25, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.7)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneLetters(){
+  ctx.fillStyle = gradV(0, H, [[0,'#1a0e06'],[0.4,'#2a1a0e'],[1,'#0a0604']]);
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = gradR(W/2, H*0.3, 30, 340, [[0,'rgba(240,200,140,0.35)'],[1,'rgba(240,200,140,0)']]);
+  ctx.fillRect(0,0,W,H);
+  R(0, H*0.55, W, 3, '#3a2418');
+  const letters = [
+    [30, 360, 130, 90, -8],
+    [170, 400, 140, 95, 6],
+    [60, 480, 130, 88, -4],
+    [180, 520, 130, 92, 10],
+    [40, 560, 120, 80, -6],
+  ];
+  for (const [x, y, w, h, rot] of letters){
+    ctx.save();
+    ctx.translate(x + w/2, y + h/2);
+    ctx.rotate(rot * Math.PI / 180);
+    ctx.fillStyle = '#e8d8b0';
+    ctx.fillRect(-w/2, -h/2, w, h);
+    ctx.fillStyle = 'rgba(140,120,80,0.5)';
+    for (let i=0;i<5;i++){
+      ctx.fillRect(-w/2 + 12, -h/2 + 15 + i*12, w - 24, 1);
+    }
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.translate(W/2, H*0.75);
+  ctx.rotate(-3 * Math.PI / 180);
+  ctx.fillStyle = '#f0e2c0';
+  ctx.fillRect(-110, -60, 220, 120);
+  ctx.fillStyle = 'rgba(120,100,60,0.6)';
+  for (let i=0;i<7;i++){
+    ctx.fillRect(-95, -45 + i*14, 180, 1.5);
+  }
+  ctx.restore();
+  if (hasChar('marco_adult')) drawMarco(W*0.5, H*1.05, 1.1, { mood:'sad', age:'adult' });
+  ctx.fillStyle = gradR(W/2, H/2, H*0.3, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.7)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneGrave(){
+  ctx.fillStyle = gradV(0, H*0.65, [[0,'#2a3050'],[0.5,'#6a5a5a'],[1,'#3a2a20']]);
+  ctx.fillRect(0,0,W,H*0.65);
+  ctx.fillStyle = 'rgba(30,30,50,0.5)';
+  ctx.beginPath(); ctx.ellipse(W*0.3, 80, 90, 20, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(W*0.7, 100, 110, 24, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = gradV(H*0.65, H, [[0,'#1a2010'],[1,'#0a1004']]);
+  ctx.fillRect(0, H*0.65, W, H*0.35);
+  for (const [tx, tw] of [[40, 30],[100, 25],[280, 28]]){
+    R(tx, H*0.68, tw, 40, '#1a1814');
+    ctx.fillStyle = '#1a1814';
+    ctx.beginPath();
+    ctx.moveTo(tx, H*0.68);
+    ctx.quadraticCurveTo(tx + tw/2, H*0.68 - 15, tx + tw, H*0.68);
+    ctx.fill();
+  }
+  const tx = W/2 - 40, ty = H*0.55, tw = 80, th = 100;
+  R(tx, ty, tw, th, '#3a3630');
+  R(tx, ty, tw, 4, '#4a4640');
+  ctx.fillStyle = '#3a3630';
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.quadraticCurveTo(tx + tw/2, ty - 30, tx + tw, ty);
+  ctx.fill();
+  R(tx + 18, ty + 35, 44, 2, '#1a1814');
+  R(tx + 22, ty + 50, 36, 2, '#1a1814');
+  R(tx + 18, ty + 65, 44, 2, '#1a1814');
+  ctx.fillStyle = '#8a2a2a';
+  ctx.beginPath(); ctx.arc(tx + 6, ty + th, 5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(tx + tw - 6, ty + th, 5, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#f0e8dc';
+  ctx.fillRect(tx + 30, ty - 8, 20, 14);
+  ctx.strokeStyle = 'rgba(200,190,170,0.6)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(tx + 30.5, ty - 7.5, 19, 13);
+  if (hasChar('marco_adult')) drawMarco(W*0.7, H*0.9, 1.1, { mood:'sad', age:'adult' });
+  ctx.fillStyle = gradR(W/2, H*0.4, H*0.3, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.55)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneAbstract(){
+  ctx.fillStyle = gradV(0, H, [[0,'#0e0a1a'],[1,'#050308']]);
+  ctx.fillRect(0,0,W,H);
+  const t = G.time;
+  for (let i=0;i<3;i++){
+    const ox = W*0.5 + Math.sin(t*0.4 + i*2) * W*0.3;
+    const oy = H*0.5 + Math.cos(t*0.3 + i*1.7) * H*0.25;
+    const r = 60 + i*40;
+    const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, r);
+    const colors = ['212,184,120', '138,106,200', '200,140,120'];
+    g.addColorStop(0, `rgba(${colors[i]},0.15)`);
+    g.addColorStop(1, `rgba(${colors[i]},0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+  }
+  ctx.strokeStyle = 'rgba(212,184,120,0.06)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H); ctx.stroke();
+  ctx.fillStyle = gradR(W/2, H/2, H*0.3, H*0.95, [[0,'rgba(0,0,0,0)'],[1,'rgba(0,0,0,0.65)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneSunrise(){
+  ctx.fillStyle = gradV(0, H, [[0,'#f0d0a0'],[0.4,'#e8b880'],[0.7,'#c89870'],[1,'#8a6850']]);
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = gradR(W*0.5, H*0.55, 20, 240, [[0,'rgba(255,250,220,0.95)'],[0.4,'rgba(255,220,150,0.7)'],[1,'rgba(255,220,150,0)']]);
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = 'rgba(255,248,220,0.9)';
+  ctx.beginPath(); ctx.arc(W*0.5, H*0.55, 30, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(80,60,40,0.5)';
+  ctx.fillRect(0, H*0.72, W, H*0.28);
+  ctx.fillStyle = gradR(W/2, H*0.55, 40, 380, [[0,'rgba(255,220,150,0.25)'],[1,'rgba(255,220,150,0)']]);
+  ctx.fillRect(0,0,W,H);
+}
+
+function sceneMenu(){
+  ctx.fillStyle = gradV(0, H, [[0,'#1a0e08'],[0.5,'#0a0604'],[1,'#020104']]);
+  ctx.fillRect(0,0,W,H);
+  const p = Math.sin(G.time*0.6)*0.5 + 0.5;
+  ctx.fillStyle = gradR(W/2, H*0.35, 30, 320, [[0,`rgba(200,120,60,${0.25+p*0.12})`],[1,'rgba(0,0,0,0)']]);
+  ctx.fillRect(0,0,W,H);
+  drawNanay(W*0.5, H*0.72, 1.4, { mood:'smiling' });
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const flicker = 0.85 + Math.sin(G.time*5)*0.05;
+  ctx.font = 'bold 24px "Courier New", monospace';
+  ctx.fillStyle = `rgba(220,120,60,${0.35 * flicker})`;
+  ctx.fillText('ANG PANYO', W/2 + 2, H*0.16 + 2);
+  ctx.fillText('NI NANAY', W/2 + 2, H*0.16 + 34);
+  ctx.fillStyle = `rgba(80,120,180,${0.20 * flicker})`;
+  ctx.fillText('ANG PANYO', W/2 - 2, H*0.16 - 2);
+  ctx.fillText('NI NANAY', W/2 - 2, H*0.16 + 30);
+  ctx.fillStyle = `rgba(245,232,215,${flicker})`;
+  ctx.fillText('ANG PANYO', W/2, H*0.16);
+  ctx.fillText('NI NANAY', W/2, H*0.16 + 32);
+  ctx.font = 'italic 10px "Courier New", monospace';
+  ctx.fillStyle = 'rgba(190,160,140,0.9)';
+  ctx.fillText('isang kuwento ng pag-ibig at pagpapaalam', W/2, H*0.16 + 62);
+  ctx.font = '10px "Courier New", monospace';
+  ctx.fillStyle = 'rgba(160,140,120,0.8)';
+  ctx.fillText('Para sa lahat ng mga Nanay na naghintay.', W/2, H*0.16 + 90);
+  ctx.fillText('Para sa lahat ng mga anak na hindi nakauwi.', W/2, H*0.16 + 104);
+  const bx = W/2 - 90, by = H*0.86, bw = 180, bh = 46;
+  const pulse = 0.5 + Math.sin(G.time*2.2)*0.35;
+  ctx.fillStyle = gradR(W/2, by + bh/2, 20, 150, [[0,`rgba(255,190,130,${0.15 + pulse*0.12})`],[1,'rgba(255,190,130,0)']]);
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(26,16,10,0.95)';
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = `rgba(220,160,110,${0.55 + pulse*0.35})`;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(bx+0.5, by+0.5, bw-1, bh-1);
+  ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.fillStyle = '#e8d0b0';
+  ctx.fillText('SIMULAN', W/2, by + bh/2 + 1);
+  ctx.font = '9px "Courier New", monospace';
+  ctx.fillStyle = `rgba(180,140,120,${0.5 + Math.sin(G.time*1.5)*0.15})`;
+  ctx.fillText('inirerekomenda ang headphones', W/2, H - 30);
+  ctx.font = 'bold 10px "Courier New", monospace';
+  ctx.fillStyle = `rgba(220,170,120,${0.7 + Math.sin(G.time*2)*0.1})`;
+  ctx.fillText('MADE BY: ADRIAN SUAREZ', W/2, H - 14);
+}
+
+function drawScene(){
+  switch(G.scene){
+    case 'menu': sceneMenu(); break;
+    case 'black': sceneBlack(); break;
+    case 'railway': sceneRailway(); break;
+    case 'kitchen': sceneKitchen(); break;
+    case 'study': sceneStudy(); break;
+    case 'bus': sceneBus(); break;
+    case 'manila': sceneManila(); break;
+    case 'rainNight': sceneRainNight(); break;
+    case 'hospital': sceneHospital(); break;
+    case 'letters': sceneLetters(); break;
+    case 'grave': sceneGrave(); break;
+    case 'abstract': sceneAbstract(); break;
+    case 'sunrise': sceneSunrise(); break;
+    default: sceneBlack(); break;
+  }
+}
+
+/* ============================================================
+   TEXT & UI
+   ============================================================ */
+function wrapText(text, x, y, maxW, lineH){
+  const words = text.split(' ');
+  let line = '';
+  let yy = y;
+  for (const w of words){
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line){
+      ctx.fillText(line, x, yy);
+      line = w; yy += lineH;
+    } else { line = test; }
+  }
+  if (line) ctx.fillText(line, x, yy);
+}
+function wrapTextCenter(text, cx, cy, maxW, lineH){
+  const words = text.split(' ');
+  const lines = [];
+  let line = '';
+  for (const w of words){
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line){
+      lines.push(line); line = w;
+    } else { line = test; }
+  }
+  if (line) lines.push(line);
+  const totalH = lines.length * lineH;
+  const startY = cy - totalH/2 + lineH/2;
+  for (let i=0;i<lines.length;i++){
+    ctx.fillText(lines[i], cx, startY + i*lineH);
+  }
+}
+
+function drawTextBox(){
+  const s = STORY[G.storyIdx];
+  if (!s) return;
+  if (s.isQuote || s.isFinal) return;
+  const txt = G.text;
+  if (!txt.full) return;
+  const boxH = 140;
+  const boxY = H - boxH - 10;
+  ctx.fillStyle = 'rgba(0,0,0,0.82)';
+  ctx.fillRect(0, boxY, W, boxH + 10);
+  ctx.fillStyle = 'rgba(200,170,150,0.20)';
+  ctx.fillRect(0, boxY, W, 1);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const padX = 18;
+  let textY = boxY + 16;
+  if (txt.who){
+    let color = '#c8b898';
+    if (txt.who.includes('NANAY')) color = '#e8b890';
+    else if (txt.who.includes('MARCO')) color = '#a8c0e0';
+    else if (txt.who.includes('BOSES')) color = '#c0b0a0';
+    else if (txt.who.includes('KATE')) color = '#e0b0d0';
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.fillStyle = color;
+    ctx.fillText(txt.who, padX, textY);
+    textY += 20;
+  }
+  ctx.font = '14px "Courier New", monospace';
+  ctx.fillStyle = '#e8dcc8';
+  const shown = txt.full.slice(0, Math.floor(txt.shown));
+  wrapText(shown, padX, textY, W - padX*2, 18);
+  if (txt.done){
+    const pulse = 0.4 + Math.sin(G.time*4)*0.4;
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.fillStyle = `rgba(232,200,150,${pulse})`;
+    ctx.fillText('TAP \u25B8', W - 16, boxY + boxH - 12);
+  }
+}
+
+function drawQuote(){
+  const s = STORY[G.storyIdx];
+  if (!s || !s.isQuote) return;
+  const txt = G.text;
+  if (!txt.full) return;
+  const shown = txt.full.slice(0, Math.floor(txt.shown));
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '48px Georgia, serif';
+  ctx.fillStyle = 'rgba(212,184,120,0.35)';
+  ctx.fillText('\u201C', W/2, H*0.28);
+  ctx.font = 'italic 15px "Courier New", monospace';
+  ctx.fillStyle = '#f0e6d0';
+  wrapTextCenter(shown, W/2, H*0.5, W - 70, 22);
+  if (txt.done){
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.fillStyle = 'rgba(212,184,120,0.85)';
+    ctx.fillText('— ADRIAN SUAREZ', W/2, H*0.78);
+  }
+  // TAP indicator
+  if (txt.done){
+    const pulse = 0.4 + Math.sin(G.time*4)*0.4;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.fillStyle = `rgba(232,200,150,${pulse})`;
+    ctx.fillText('TAP \u25B8', W/2, H - 40);
+  }
+}
+
+function drawFinal(){
+  const s = STORY[G.storyIdx];
+  if (!s || !s.isFinal) return;
+  const txt = G.text;
+  if (!txt.full) return;
+  const shown = txt.full.slice(0, Math.floor(txt.shown));
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (s.isByline){
+    ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.fillStyle = 'rgba(140,80,40,0.95)';
+    ctx.fillText(shown, W/2, H*0.5);
+  } else {
+    ctx.font = 'italic 15px "Courier New", monospace';
+    ctx.fillStyle = '#3a2818';
+    wrapTextCenter(shown, W/2, H*0.5, W - 60, 22);
+  }
+  // TAP indicator
+  if (txt.done){
+    const pulse = 0.4 + Math.sin(G.time*4)*0.4;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.fillStyle = `rgba(60,40,20,${pulse})`;
+    ctx.fillText('TAP \u25B8', W/2, H - 40);
+  }
+}
+
+/* ============================================================
+   POST FX
+   ============================================================ */
+function applyPostFx(){
+  const v = ctx.createRadialGradient(W/2, H/2, H*0.3, W/2, H/2, H*0.95);
+  v.addColorStop(0, 'rgba(0,0,0,0)');
+  v.addColorStop(1, 'rgba(0,0,0,0.80)');
+  ctx.fillStyle = v;
+  ctx.fillRect(0,0,W,H);
+  for (let i=0;i<70;i++){
+    ctx.fillStyle = `rgba(255,255,255,${Math.random()*0.025})`;
+    ctx.fillRect((Math.random()*W)|0, (Math.random()*H)|0, 1, 1);
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.04)';
+  for (let y=0;y<H;y+=3) ctx.fillRect(0,y,W,1);
+  if (G.cry > 0.1){
+    for (const tp of G.tears){
+      ctx.fillStyle = `rgba(220,235,255,${tp.life*0.85})`;
+      ctx.beginPath();
+      ctx.ellipse(tp.x, tp.y, tp.size*0.7, tp.size*1.3, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+  if (G.whiteOut > 0.01){
+    ctx.fillStyle = `rgba(255,255,255,${G.whiteOut})`;
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+/* ============================================================
+   UPDATE
+   ============================================================ */
+function updateText(dt){
+  const txt = G.text;
+  if (!txt.full) return;
+  if (txt.shown >= txt.full.length){ txt.done = true; return; }
+  txt.charT += dt;
+  const speed = 1/35;
+  while (txt.charT > speed && txt.shown < txt.full.length){
+    txt.charT -= speed;
+    txt.shown++;
+    const c = txt.full[Math.floor(txt.shown)-1];
+    if (c && c !== ' ' && c !== '.' && c !== ',' && c !== '"' && c !== '\'' && c !== '—'){
+      blip(500 + Math.random()*300, 0.005);
+    }
+    if (txt.shown >= txt.full.length) txt.done = true;
+  }
+}
+
+function updateTears(dt){
+  if (G._faceX !== null && G._faceX !== undefined && G.cry > 0.12){
+    const rate = 3 + G.cry * 12;
+    if (Math.random() < rate * dt){
+      const side = Math.random() < 0.5 ? -1 : 1;
+      G.tears.push({
+        x: G._faceX + side * G._eyeSpacing + (Math.random()-0.5)*1.5,
+        y: G._faceY + 2 + Math.random()*1.5,
+        vy: 12 + Math.random()*18,
+        life: 1, size: 0.7 + Math.random()*0.9,
+      });
+    }
+  }
+  for (let i = G.tears.length-1; i>=0; i--){
+    const tp = G.tears[i];
+    tp.y += tp.vy * dt; tp.vy += 22 * dt; tp.life -= dt * 0.6;
+    if (tp.life <= 0 || tp.y > H){ G.tears.splice(i,1); }
+  }
+}
+
+function updateFx(dt){
+  if (G.cry < G.cryTarget) G.cry = Math.min(G.cryTarget, G.cry + dt*0.5);
+  else if (G.cry > G.cryTarget) G.cry = Math.max(G.cryTarget, G.cry - dt*0.5);
+  G.shake *= Math.pow(0.001, dt);
+  G.whiteOut *= Math.pow(0.3, dt);
+  if (G.fade !== G.fadeTarget){
+    const dir = Math.sign(G.fadeTarget - G.fade);
+    G.fade += dir * G.fadeSpeed * dt;
+    if ((dir > 0 && G.fade > G.fadeTarget) || (dir < 0 && G.fade < G.fadeTarget)){
+      G.fade = G.fadeTarget;
+    }
+  }
+}
+
+/* ============================================================
+   STORY RUNNER
+   ============================================================ */
+function loadStory(idx){
+  if (idx >= STORY.length){
+    G.phase = 'end';
+    return;
+  }
+  G.storyIdx = idx;
+  const s = STORY[idx];
+  const prevScene = G.scene;
+
+  // When phone call arrives (rainNight) — start blk.mp3, kill procedural BGM
+  if (s.sc === 'rainNight' && !G.realMusicPhase){
+    G.realMusicPhase = true;
+    RealMusic.startA();
+  }
+
+  if (s.sc !== prevScene){
+    G.scene = s.sc;
+    G.fade = 1;
+    G.fadeTarget = 0;
+    G.fadeSpeed = 1.2;
+    if (prevScene !== 'menu') setTimeout(()=>sceneTransition(), 200);
+  }
+
+  if (!G.realMusicPhase && s.bgm){
+    BGM.play(s.bgm);
+  }
+
+  if (s.sfx) setTimeout(()=>playNamedSFX(s.sfx), 300);
+  if (s.sc === 'hospital'){
+    if (s.txt && (s.txt.includes('Bumagsak') || s.txt.includes('huling beses'))){
+      G.cryTarget = 0.8;
+    }
+    if (s.txt && s.txt.includes('huling beses')){
+      G.whiteOut = 0.3;
+    }
+  }
+  if (s.sc === 'letters') G.cryTarget = 0.5;
+  if (s.sc === 'grave') G.cryTarget = 0.3;
+  if (s.sc === 'sunrise') G.cryTarget = 0;
+  G.text.who = s.who || '';
+  G.text.full = s.txt || '';
+  G.text.shown = 0;
+  G.text.charT = 0;
+  G.text.done = false;
+}
+
+function nextStory(){
+  if (G.storyIdx >= STORY.length - 1){
+    G.phase = 'end';
+    return;
+  }
+  loadStory(G.storyIdx + 1);
+}
+
+function startStory(){
+  G.phase = 'story';
+  loadStory(0);
+}
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+function canvasPos(cx, cy){
+  const r = canvas.getBoundingClientRect();
+  return { x:(cx-r.left)/r.width*W, y:(cy-r.top)/r.height*H };
+}
+function handleTap(x, y){
+  if (!audioCtx) initAudio();
+  if (G.phase === 'menu'){
+    const bx = W/2 - 90, by = H*0.86, bw = 180, bh = 46;
+    if (x >= bx && x <= bx+bw && y >= by && y <= by+bh){
+      startStory();
+    }
+    return;
+  }
+  if (G.phase === 'story'){
+    const s = STORY[G.storyIdx];
+    if (!s) return;
+    if (!G.text.done){
+      G.text.shown = G.text.full.length;
+      G.text.done = true;
+      return;
+    }
+    nextStory();
+  }
+}
+
+canvas.addEventListener('mousedown', e=>{
+  const p = canvasPos(e.clientX, e.clientY);
+  handleTap(p.x, p.y);
+});
+canvas.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  if (!audioCtx) initAudio();
+  for (const t of e.changedTouches){
+    const p = canvasPos(t.clientX, t.clientY);
+    handleTap(p.x, p.y);
+  }
+}, { passive: false });
+addEventListener('keydown', e=>{
+  if (!audioCtx) initAudio();
+  if (e.key === ' ' || e.key === 'Enter'){
+    e.preventDefault();
+    handleTap(W/2, H/2);
+  }
+});
+document.addEventListener('gesturestart', e => e.preventDefault());
+document.addEventListener('gesturechange', e => e.preventDefault());
+document.addEventListener('gestureend', e => e.preventDefault());
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+/* ============================================================
+   DRAW LOOP
+   ============================================================ */
+function draw(){
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,W,H);
+  ctx.save();
+  if (G.shake > 0.1){
+    ctx.translate((Math.random()-0.5)*G.shake, (Math.random()-0.5)*G.shake);
+  }
+  drawScene();
+  ctx.restore();
+  if (G.phase === 'story'){
+    const s = STORY[G.storyIdx];
+    if (s){
+      if (s.isQuote) drawQuote();
+      else if (s.isFinal) drawFinal();
+      else drawTextBox();
+    }
+  }
+  applyPostFx();
+  if (G.fade > 0.01){
+    ctx.fillStyle = `rgba(0,0,0,${G.fade})`;
+    ctx.fillRect(0,0,W,H);
+  }
+  if (G.phase === 'end'){
+    ctx.fillStyle = 'rgba(0,0,0,0.88)';
+    ctx.fillRect(0,0,W,H);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 24px "Courier New", monospace';
+    const p = 0.5 + Math.sin(G.time*2)*0.5;
+    ctx.fillStyle = `rgba(232,216,184,${0.7 + p*0.3})`;
+    ctx.fillText('WAKAS', W/2, H*0.45);
+    ctx.font = 'italic 11px "Courier New", monospace';
+    ctx.fillStyle = 'rgba(180,160,140,0.8)';
+    ctx.fillText('Adrian Suarez', W/2, H*0.55);
+  }
+}
+
+/* ============================================================
+   LOOP
+   ============================================================ */
+let lastT = performance.now();
+function loop(now){
+  const dt = Math.min((now-lastT)/1000, 0.05);
+  lastT = now;
+  G.time += dt;
+  updateText(dt);
+  updateTears(dt);
+  updateFx(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ============================================================
+   FIRST GESTURE
+   ============================================================ */
+RealMusic.init();
+let unlocked = false;
+function unlockAudio(){
+  if (unlocked) return;
+  unlocked = true;
+  initAudio();
+  BGM.init();
+  BGM.play('menu');
+}
+['click','touchstart','keydown'].forEach(ev=>{
+  document.addEventListener(ev, unlockAudio, { once: true });
+});
+
+</script>
+</body>
+</html>
